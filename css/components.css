@@ -7281,16 +7281,124 @@ input:checked+.switch-slider::before {
 }
 
 .nested-tree-list {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
+.nested-tree-list.is-tree-dragging {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .nested-tree-node {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-left: calc(var(--tree-depth, 0) * 18px);
+  padding-left: calc(var(--tree-depth, 0) * 22px);
+  transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1), padding-left 0.16s ease, opacity 0.2s ease;
+}
+
+.nested-tree-snap-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.nested-tree-snap-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 1px;
+  transition: background-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.nested-tree-snap-rail.is-active {
+  background: var(--app-accent, #25d366);
+  box-shadow: 0 0 8px rgba(37, 211, 102, 0.55);
+}
+
+.nested-tree-node.is-floating-drag {
+  z-index: 1050;
+  pointer-events: none;
+  opacity: 0.96;
+  transform: scale(1.025);
+  padding-left: 0 !important;
+  transition: none !important;
+}
+
+.nested-tree-node.is-floating-drag .nested-tree-card {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.52);
+  border-color: var(--app-accent, #25d366);
+  background: var(--wa-surface-elevated, #233138);
+}
+
+.nested-tree-drag-pill {
+  position: absolute;
+  top: -10px;
+  right: 12px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--app-accent, #25d366);
+  color: #0b141a;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.nested-tree-drag-pill.is-unnest {
+  background: #f15c6d;
+  color: #ffffff;
+}
+
+.nested-tree-drag-pill.is-root {
+  background: #53bdeb;
+  color: #0b141a;
+}
+
+.nested-tree-drop-placeholder {
+  box-sizing: border-box;
+  margin-left: calc(var(--tree-depth, 0) * 22px);
+  border: 2px dashed rgba(37, 211, 102, 0.72);
+  border-radius: 10px;
+  background: rgba(37, 211, 102, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-accent, #25d366);
+  pointer-events: none;
+  transition: margin-left 0.14s ease, border-color 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.nested-tree-drop-placeholder.is-unnest-target {
+  border-color: #f15c6d;
+  background: rgba(241, 92, 109, 0.14);
+  color: #f15c6d;
+}
+
+.nested-tree-drop-placeholder.is-root-target {
+  border-color: #53bdeb;
+  background: rgba(83, 189, 235, 0.14);
+  color: #53bdeb;
+}
+
+[data-theme="light"] .nested-tree-snap-rail {
+  background: rgba(17, 27, 33, 0.08);
+}
+
+[data-theme="light"] .nested-tree-node.is-floating-drag .nested-tree-card {
+  background: #ffffff;
+  box-shadow: 0 10px 26px rgba(17, 27, 33, 0.22);
 }
 
 .nested-tree-branch-guide {
@@ -7412,26 +7520,7 @@ input:checked+.switch-slider::before {
   cursor: grabbing;
 }
 
-.nested-tree-node {
-  transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.2s ease;
-}
-
-.nested-tree-node.is-dragged {
-  opacity: 0.92;
-  transform: scale(1.03);
-  z-index: 10;
-}
-
-.nested-tree-node.is-dragged .nested-tree-card {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  border-color: var(--app-accent, #25d366);
-}
-
-.nested-tree-node.is-drop-target .nested-tree-card {
-  border-color: #53bdeb;
-  background: rgba(83, 189, 235, 0.18);
-  box-shadow: 0 0 12px rgba(83, 189, 235, 0.4);
-}
+/* Hover/highlight handled by .nested-tree-drop-placeholder & .is-floating-drag above */
 
 .nested-tree-btn.indent-btn,
 .nested-tree-btn.outdent-btn {

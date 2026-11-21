@@ -1,6 +1,6 @@
-// WhatsApp Android Clone Service Worker v2.3.10
-const APP_VERSION = '2.3.10';
-const CACHE_NAME = 'wa-clone-v2.3.10';
+// WhatsApp Android Clone Service Worker v2.3.11
+const APP_VERSION = '2.3.11';
+const CACHE_NAME = 'wa-clone-v2.3.11';
 
 const APP_SHELL_FILES = [
   './',
@@ -24,6 +24,7 @@ const APP_SHELL_FILES = [
   './js/utils/drawer-resizer.js',
   './js/utils/link-preview.js',
   './js/utils/message-mapper.js',
+  './js/utils/nested-tree-dnd.js',
   './js/utils/rich-text.js',
   './js/utils/storage-backup.js',
   './js/config/app-icons.js',

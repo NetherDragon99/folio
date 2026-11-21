@@ -1,5 +1,6 @@
 // Floating Reaction Bar — appears near long-pressed message
-// Shows 6 quick-reaction emojis + a + button to open the full emoji picker
+// Non-blocking: tapping any header button, overflow action, or message outside the bar
+// triggers its own action immediately on the first tap while dismissing the bar automatically.
 
 export class ReactionBar {
   constructor({ onReact, onOpenPicker } = {}) {
@@ -8,18 +9,14 @@ export class ReactionBar {
     this.currentMsgId = null;
     this.currentReaction = null;
     this.barEl = null;
-    this.backdropEl = null;
+    this._isVisible = false;
     this._escHandler = null;
+    this._outsidePointerHandler = null;
+    this._scrollHandler = null;
     this._buildDOM();
   }
 
   _buildDOM() {
-    // Backdrop (invisible, intercepts outside clicks)
-    this.backdropEl = document.createElement('div');
-    this.backdropEl.className = 'floating-reaction-backdrop';
-    this.backdropEl.addEventListener('click', () => this.hide());
-
-    // Bar
     this.barEl = document.createElement('div');
     this.barEl.className = 'floating-reaction-bar';
     this.barEl.setAttribute('role', 'toolbar');
@@ -42,7 +39,6 @@ export class ReactionBar {
       this.barEl.appendChild(btn);
     });
 
-    // + button
     const addBtn = document.createElement('button');
     addBtn.type = 'button';
     addBtn.className = 'reaction-emoji-btn reaction-add-btn';
@@ -56,12 +52,23 @@ export class ReactionBar {
     });
     this.barEl.appendChild(addBtn);
 
-    document.body.appendChild(this.backdropEl);
     document.body.appendChild(this.barEl);
-
-    // Start hidden
-    this.backdropEl.style.display = 'none';
     this.barEl.style.display = 'none';
+  }
+
+  _detachGlobalListeners() {
+    if (this._outsidePointerHandler) {
+      document.removeEventListener('pointerdown', this._outsidePointerHandler, { capture: true });
+      this._outsidePointerHandler = null;
+    }
+    if (this._scrollHandler) {
+      window.removeEventListener('scroll', this._scrollHandler, { capture: true });
+      this._scrollHandler = null;
+    }
+    if (this._escHandler) {
+      document.removeEventListener('keydown', this._escHandler);
+      this._escHandler = null;
+    }
   }
 
   /**
@@ -71,10 +78,11 @@ export class ReactionBar {
    * @param {string|null} [currentReaction] - existing emoji reaction
    */
   show(msgId, rowEl, currentReaction = null) {
+    this._detachGlobalListeners();
     this.currentMsgId = msgId;
     this.currentReaction = currentReaction;
+    this._isVisible = true;
 
-    // Highlight current reaction button if matched
     this.barEl.querySelectorAll('.reaction-emoji-btn').forEach((btn) => {
       if (btn.dataset.emoji && btn.dataset.emoji === currentReaction) {
         btn.classList.add('is-active');
@@ -83,22 +91,18 @@ export class ReactionBar {
       }
     });
 
-    const target = rowEl.querySelector('.msg-bubble') || rowEl;
-    const rect = target.getBoundingClientRect();
+    const target = rowEl?.querySelector?.('.msg-bubble') || rowEl;
+    const rect = target?.getBoundingClientRect ? target.getBoundingClientRect() : { top: 200, bottom: 250, left: 20, right: 200 };
     const barHeight = 52;
     const margin = 10;
-    const viewH = window.innerHeight;
-    const viewW = window.innerWidth;
+    const viewH = window.innerHeight || 800;
+    const viewW = window.innerWidth || 400;
 
-    // Determine position: if the bubble top is in lower 45% -> show ABOVE, else BELOW
     const showAbove = rect.top > viewH * 0.45;
-
-    // Approximate width of reaction bar
     const barWidth = 300;
 
     let left = rect.left;
     if (rect.right > viewW * 0.5) {
-      // Outgoing message bubble on right: align toward right edge of bubble
       left = rect.right - barWidth;
     }
     if (left + barWidth > viewW - 12) left = viewW - barWidth - 12;
@@ -109,22 +113,37 @@ export class ReactionBar {
 
     this.barEl.style.left = `${Math.round(left)}px`;
     this.barEl.style.top = `${Math.round(top)}px`;
-
-    this.backdropEl.style.display = 'block';
     this.barEl.style.display = 'flex';
 
-    // Animate in
     this.barEl.classList.remove('reaction-bar-visible');
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        this.barEl.classList.add('reaction-bar-visible');
+        if (this._isVisible) {
+          this.barEl.classList.add('reaction-bar-visible');
+        }
       });
     });
 
-    // Escape key dismissal
-    if (this._escHandler) {
-      document.removeEventListener('keydown', this._escHandler);
-    }
+    // Capture-phase passive listeners: NEVER call preventDefault() or stopPropagation()
+    // so external taps (selection bar actions, overflow menu, other messages) fire immediately!
+    this._outsidePointerHandler = (e) => {
+      if (!this._isVisible) return;
+      if (this.barEl && typeof this.barEl.contains === 'function' && this.barEl.contains(e.target)) {
+        return;
+      }
+      this.hide();
+    };
+    document.addEventListener('pointerdown', this._outsidePointerHandler, { capture: true, passive: true });
+
+    this._scrollHandler = (e) => {
+      if (!this._isVisible) return;
+      if (this.barEl && typeof this.barEl.contains === 'function' && this.barEl.contains(e.target)) {
+        return;
+      }
+      this.hide();
+    };
+    window.addEventListener('scroll', this._scrollHandler, { capture: true, passive: true });
+
     this._escHandler = (e) => {
       if (e.key === 'Escape') this.hide();
     };
@@ -132,31 +151,26 @@ export class ReactionBar {
   }
 
   hide(immediate = false) {
+    this._isVisible = false;
+    this._detachGlobalListeners();
+
     this.barEl.classList.remove('reaction-bar-visible');
     if (immediate) {
       this.barEl.style.display = 'none';
-      this.backdropEl.style.display = 'none';
     } else {
       setTimeout(() => {
-        if (!this.barEl.classList.contains('reaction-bar-visible')) {
+        if (!this._isVisible && !this.barEl.classList.contains('reaction-bar-visible')) {
           this.barEl.style.display = 'none';
-          this.backdropEl.style.display = 'none';
         }
       }, 150);
     }
 
-    if (this._escHandler) {
-      document.removeEventListener('keydown', this._escHandler);
-      this._escHandler = null;
-    }
     this.currentMsgId = null;
     this.currentReaction = null;
   }
 
   destroy() {
-    this.hide();
+    this.hide(true);
     if (this.barEl && this.barEl.parentNode) this.barEl.parentNode.removeChild(this.barEl);
-    if (this.backdropEl && this.backdropEl.parentNode) this.backdropEl.parentNode.removeChild(this.backdropEl);
-    if (this._escHandler) document.removeEventListener('keydown', this._escHandler);
   }
 }

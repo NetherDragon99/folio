@@ -1296,7 +1296,7 @@ export class VirtualMessageScroller {
         <div class="album-caption-meta">
           ${albumStarHtml}
           ${albumPinHtml}
-          <span>${this.formatTime(lastMsg.timestamp)}</span>
+          <span>${this.formatTime(lastMsg.displayTimestamp ?? lastMsg.timestamp)}</span>
           ${checksHtml}
         </div>
       `;
@@ -1309,7 +1309,7 @@ export class VirtualMessageScroller {
       if (firstMsg.isOutgoing) {
         checksHtml = Icons.checks(true, 'receipt-check', 15);
       }
-      metaRow.innerHTML = `${albumStarHtml}${albumPinHtml}<span class="album-meta-time">${this.formatTime(lastMsg.timestamp)}</span>${checksHtml}`;
+      metaRow.innerHTML = `${albumStarHtml}${albumPinHtml}<span class="album-meta-time">${this.formatTime(lastMsg.displayTimestamp ?? lastMsg.timestamp)}</span>${checksHtml}`;
       bubble.appendChild(metaRow);
     }
     this._applyStructuralDecorations(row, bubble, firstMsg);
@@ -1447,7 +1447,7 @@ export class VirtualMessageScroller {
     const isPinned = this.pinnedMessageIds && this.pinnedMessageIds.has(String(msg.id));
     const pinHtml = isPinned ? `<span class="msg-pin-badge" title="Pinned">${Icons.pin('pin-icon-meta', 11)}</span>` : '';
     const editedHtml = msg.isEdited ? '<span class="edited-tag">Edited</span>' : '';
-    metaSpan.innerHTML = `${editedHtml}${starHtml}${pinHtml}<span class="msg-time">${this.formatTime(msg.timestamp)}</span>${checksHtml}`;
+    metaSpan.innerHTML = `${editedHtml}${starHtml}${pinHtml}<span class="msg-time">${this.formatTime(msg.displayTimestamp ?? msg.timestamp)}</span>${checksHtml}`;
     bubble.appendChild(metaSpan);
 
     // Apply independent list markers + multi-level nested tree badges & connectors

@@ -20,6 +20,7 @@ import { MessageInfoSheet } from '../components/message-info-sheet.js';
 import { ShareOptionsModal } from '../components/share-options-modal.js';
 import { RichComposer } from '../components/rich-composer.js';
 import { NestedChainSheet } from '../components/nested-chain-sheet.js';
+import { computeChatSlotReassignments } from '../utils/nested-tree-dnd.js';
 import {
   findNearestDateMessage,
   formatDateDisplay,
@@ -2575,6 +2576,11 @@ export class ChatView {
     this.nestedTreeSheet.open({
       rootMsg: msg,
       focusMsg: msg,
+      getTreeState: () => ({
+        allMessages: this.scroller?.allMessages || [],
+        nestedChildrenByParentId: this.scroller?.nestedChildrenByParentId || new Map(),
+        listPositionByMsgId: this.scroller?.listPositionByMsgId || new Map()
+      }),
       allMessages: this.scroller.allMessages,
       nestedChildrenByParentId: this.scroller.nestedChildrenByParentId,
       listPositionByMsgId: this.scroller.listPositionByMsgId,
@@ -2602,6 +2608,68 @@ export class ChatView {
         const inChat = this.messages?.find((x) => String(x.id) === String(childMsg.id));
         if (inChat) inChat.nestedParent = { ...payload };
         await this.scroller?.refreshMessagesById([String(childMsg.id), String(newParentMsg.id)]);
+      },
+      onCommitTreeChange: async (result) => {
+        if (!result || !this.scroller) return;
+        const msgById = new Map((this.scroller.allMessages || []).map((m) => [String(m.id), m]));
+        const orderedNodes = result.orderedNodes || [];
+        const unnestedNodes = result.unnestedNodes || [];
+
+        const orderedMsgs = orderedNodes.map((n) => msgById.get(String(n.id)) || n.msg).filter(Boolean);
+        const slotUpdates = computeChatSlotReassignments(orderedMsgs);
+        const slotById = new Map(slotUpdates.map((s) => [String(s.id), s]));
+
+        const toSave = [];
+        for (const node of orderedNodes) {
+          const targetMsg = msgById.get(String(node.id)) || node.msg;
+          if (!targetMsg) continue;
+          const parentObj = node.newParentId ? msgById.get(String(node.newParentId)) : null;
+          const nextParentPayload = parentObj ? this._buildNestedParentPayload(parentObj) : null;
+          const slot = slotById.get(String(targetMsg.id));
+
+          targetMsg.nestedParent = nextParentPayload;
+          if (slot) {
+            targetMsg.displayTimestamp = slot.displayTimestamp;
+            targetMsg.timestamp = slot.timestamp;
+            targetMsg.seq = slot.seq;
+          }
+          toSave.push(targetMsg);
+        }
+
+        for (const uNode of unnestedNodes) {
+          const targetMsg = msgById.get(String(uNode.id)) || uNode.msg;
+          if (!targetMsg) continue;
+          targetMsg.nestedParent = null;
+          toSave.push(targetMsg);
+        }
+
+        if (toSave.length > 0) {
+          await db.saveMessages(toSave);
+        }
+
+        const anchorId = result.newRootId || msg.id;
+        await this.scroller.loadInitial(anchorId);
+
+        // Sync chat lastMessage if the latest message in the chat changed after reordering
+        const latestMsg = this.scroller.allMessages?.[this.scroller.allMessages.length - 1];
+        if (latestMsg && this.chat) {
+          const nextLast = {
+            text: latestMsg.text,
+            timestamp: latestMsg.timestamp,
+            isOutgoing: latestMsg.isOutgoing,
+            mediaType: latestMsg.mediaType
+          };
+          this.chat.lastMessage = nextLast;
+          await db.updateChat(this.chatId, { lastMessage: nextLast });
+        }
+
+        if (result.action === 'new-root') {
+          Toast.show('Promoted to tree root');
+        } else if (result.action === 'unnest') {
+          Toast.show('Message unnested');
+        } else {
+          Toast.show('Tree reordered');
+        }
       }
     });
   }
@@ -3103,6 +3171,7 @@ export class ChatView {
   }
 
   toggleMessageSelection(msgId, rowEl) {
+    this.reactionBar?.hide();
     const row = rowEl || (this.scroller ? this.scroller.findMessageElement(msgId) : this.container.querySelector(`.msg-row[data-msg-id="${msgId}"]`));
     if (this.selectedMessageIds.has(msgId)) {
       this.selectedMessageIds.delete(msgId);
@@ -3456,6 +3525,7 @@ export class ChatView {
         btn.innerHTML = tool.icon;
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
+          this.reactionBar?.hide();
           tool.action();
         });
         toolsBar.appendChild(btn);
@@ -3475,6 +3545,7 @@ export class ChatView {
         btn.innerHTML = tool.icon;
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
+          this.reactionBar?.hide();
           tool.action();
         });
         toolsBar.appendChild(btn);
@@ -3490,6 +3561,7 @@ export class ChatView {
         item.addEventListener('click', (e) => {
           e.stopPropagation();
           overflowMenu.style.display = 'none';
+          this.reactionBar?.hide();
           tool.action();
         });
         overflowMenu.appendChild(item);
