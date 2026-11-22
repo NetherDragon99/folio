@@ -280,6 +280,8 @@ export class ChatStorageView {
         startX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
         startY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
         pressTimer = setTimeout(() => {
+          tile._suppressClickUntil = Date.now() + 700;
+          tile._suppressContextMenuUntil = Date.now() + 700;
           if (!this.isSelectionMode) {
             this.setSelectionMode(true);
             this.toggleSelectMedia(med.id);
@@ -313,11 +315,21 @@ export class ChatStorageView {
       tile.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         cancelLongPress();
+        if (tile._suppressContextMenuUntil && Date.now() < tile._suppressContextMenuUntil) {
+          return;
+        }
+        tile._suppressClickUntil = Date.now() + 450;
         if (!this.isSelectionMode) this.setSelectionMode(true);
         this.toggleSelectMedia(med.id);
       });
 
-      tile.addEventListener('click', () => {
+      tile.addEventListener('click', (e) => {
+        if (tile._suppressClickUntil && Date.now() < tile._suppressClickUntil) {
+          tile._suppressClickUntil = 0;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (this.isSelectionMode) {
           this.toggleSelectMedia(med.id);
         } else {

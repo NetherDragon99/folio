@@ -598,6 +598,7 @@ export class GalleryView {
       if (e.button !== 0) return;
       pressTimer = setTimeout(() => {
         if (item.media?.id) {
+          tile._suppressClickUntil = Date.now() + 700;
           this.enterSelectionMode(item.media.id, tile);
         }
       }, 450);
@@ -606,7 +607,13 @@ export class GalleryView {
     tile.addEventListener('pointerleave', () => clearTimeout(pressTimer));
     tile.addEventListener('pointercancel', () => clearTimeout(pressTimer));
 
-    tile.addEventListener('click', () => {
+    tile.addEventListener('click', (e) => {
+      if (tile._suppressClickUntil && Date.now() < tile._suppressClickUntil) {
+        tile._suppressClickUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (this.isSelectionMode) {
         if (item.media?.id) {
           this.toggleItemSelection(item.media.id, tile);
@@ -657,6 +664,7 @@ export class GalleryView {
       if (e.button !== 0) return;
       pressTimer = setTimeout(() => {
         if (item.media?.id) {
+          card._suppressClickUntil = Date.now() + 700;
           this.enterSelectionMode(item.media.id, card);
         }
       }, 450);
@@ -666,6 +674,12 @@ export class GalleryView {
     card.addEventListener('pointercancel', () => clearTimeout(pressTimer));
 
     card.addEventListener('click', (e) => {
+      if (card._suppressClickUntil && Date.now() < card._suppressClickUntil) {
+        card._suppressClickUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (this.isSelectionMode) {
         if (item.media?.id) {
           this.toggleItemSelection(item.media.id, card);

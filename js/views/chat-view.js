@@ -148,7 +148,7 @@ export class ChatView {
             <button type="button" class="app-bar-icon-btn" id="btn-chat-back" aria-label="Go back">${Icons.arrowBack('', 24)}</button>
             <div class="chat-header-info" id="chat-header-profile-btn">
               <div class="chat-header-avatar">
-                ${this.chat.avatarBlob ? `<img src="${URL.createObjectURL(this.chat.avatarBlob)}" class="chat-avatar-img" alt="Avatar" />` : (this.chat.isGroup ? Icons.groupAvatar('', 38) : Icons.userAvatar('', 38))}
+                ${this.chat.avatarBlob instanceof Blob ? `<img src="${URL.createObjectURL(this.chat.avatarBlob)}" class="chat-avatar-img" alt="Avatar" />` : (this.chat.isGroup ? Icons.groupAvatar('', 38) : Icons.userAvatar('', 38))}
               </div>
               <div class="chat-header-text">
                 <div class="chat-header-title" dir="auto">${this.chat.name}</div>
@@ -2250,7 +2250,7 @@ export class ChatView {
       // Update Header Avatar
       const avatarWrap = this.container.querySelector('.chat-header-avatar');
       if (avatarWrap) {
-        avatarWrap.innerHTML = this.chat.avatarBlob
+        avatarWrap.innerHTML = this.chat.avatarBlob instanceof Blob
           ? `<img src="${URL.createObjectURL(this.chat.avatarBlob)}" class="chat-avatar-img" alt="Avatar" />`
           : (this.chat.isGroup ? Icons.groupAvatar('', 38) : Icons.userAvatar('', 38));
       }

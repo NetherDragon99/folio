@@ -260,6 +260,12 @@ export class StarredMessagesView {
 
     // Click handler: Jump to chat OR toggle selection
     card.addEventListener('click', (e) => {
+      if (card._suppressClickUntil && Date.now() < card._suppressClickUntil) {
+        card._suppressClickUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (this.isSelectionMode) {
         this.toggleSelection(msg.id, card);
       } else {
@@ -502,6 +508,7 @@ export class StarredMessagesView {
       this.cancelPendingLongPress();
 
       this.activeLongPressTimer = setTimeout(() => {
+        element._suppressClickUntil = Date.now() + 700;
         callback(e);
         this.activeLongPressTimer = null;
       }, duration);

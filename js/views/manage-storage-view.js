@@ -214,6 +214,8 @@ export class ManageStorageView {
         startX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
         startY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
         pressTimer = setTimeout(() => {
+          row._suppressClickUntil = Date.now() + 700;
+          row._suppressContextMenuUntil = Date.now() + 700;
           if (!this.isSelectionMode) {
             this.setSelectionMode(true);
             this.toggleSelectChat(c.id);
@@ -247,6 +249,10 @@ export class ManageStorageView {
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         cancelLongPress();
+        if (row._suppressContextMenuUntil && Date.now() < row._suppressContextMenuUntil) {
+          return;
+        }
+        row._suppressClickUntil = Date.now() + 450;
         if (!this.isSelectionMode) {
           this.setSelectionMode(true);
         }
@@ -254,6 +260,12 @@ export class ManageStorageView {
       });
 
       row.addEventListener('click', (e) => {
+        if (row._suppressClickUntil && Date.now() < row._suppressClickUntil) {
+          row._suppressClickUntil = 0;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (this.isSelectionMode) {
           this.toggleSelectChat(c.id);
         } else {

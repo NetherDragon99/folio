@@ -39,7 +39,7 @@ export class ContactInfoView {
     chatBytes += msgs.length * 128;
     const formattedStorage = db.formatBytes(chatBytes);
 
-    const avatarUrl = this.chat.avatarBlob ? URL.createObjectURL(this.chat.avatarBlob) : null;
+    const avatarUrl = this.chat.avatarBlob instanceof Blob ? URL.createObjectURL(this.chat.avatarBlob) : null;
 
     rootEl.innerHTML = `
       <div class="screen-view contact-info-screen">
@@ -56,10 +56,6 @@ export class ContactInfoView {
             </div>
             <span class="compact-header-name" dir="auto">${this.chat.name}</span>
           </div>
-
-          <div class="app-bar-actions">
-            <button type="button" class="app-bar-icon-btn" id="btn-info-more" aria-label="More options">${Icons.moreVert('', 22)}</button>
-          </div>
         </header>
 
         <div class="contact-info-scroll-body" id="contact-scroll-body">
@@ -72,8 +68,8 @@ export class ContactInfoView {
               <div class="hero-avatar-edit-badge" title="Change photo">
                 ${Icons.camera('', 18)}
               </div>
-              <input type="file" id="hero-avatar-file-fallback" accept="image/*" style="display:none;" />
             </div>
+            <input type="file" id="hero-avatar-file-fallback" accept="image/*" style="display:none;" />
             <h2 class="hero-contact-name" id="contact-hero-name" dir="auto" title="Click to edit name">${this.chat.name}</h2>
             <div class="hero-contact-sub">${this.chat.isGroup ? 'Group conversation' : (this.chat.isSelfChat ? 'Message yourself' : 'Contact')}</div>
           </div>
@@ -294,10 +290,10 @@ export class ContactInfoView {
 
     if (heroAvatarWrap && hiddenAvatarInput) {
       heroAvatarWrap.addEventListener('click', async (e) => {
-        e.preventDefault();
+        if (e.target === hiddenAvatarInput) return;
         e.stopPropagation();
 
-        if (this.chat.avatarBlob) {
+        if (this.chat.avatarBlob instanceof Blob) {
           // Already has an avatar -> Open Cropper Modal directly with the current photo
           const result = await openImageCropper(this.chat.avatarBlob, {
             allowDelete: true,
@@ -338,6 +334,12 @@ export class ContactInfoView {
           }
           hiddenAvatarInput.value = '';
         }
+      });
+    }
+
+    if (compactHeader) {
+      compactHeader.addEventListener('click', () => {
+        scrollBody.scrollTo({ top: 0, behavior: 'smooth' });
       });
     }
 
@@ -506,13 +508,6 @@ export class ContactInfoView {
     const exportRow = this.container.querySelector('#row-export-chat');
     if (exportRow) {
       exportRow.addEventListener('click', () => {
-        ChatExporter.showExportPrompt(this.chatId);
-      });
-    }
-
-    const moreBtn = this.container.querySelector('#btn-info-more');
-    if (moreBtn) {
-      moreBtn.addEventListener('click', () => {
         ChatExporter.showExportPrompt(this.chatId);
       });
     }

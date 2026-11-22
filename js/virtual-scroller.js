@@ -525,6 +525,8 @@ export class VirtualMessageScroller {
       startY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
 
       this.activeLongPressTimer = setTimeout(() => {
+        element._suppressClickUntil = Date.now() + 700;
+        element._suppressContextMenuUntil = Date.now() + 700;
         onAction(e);
         this.activeLongPressTimer = null;
       }, 450);
@@ -557,6 +559,10 @@ export class VirtualMessageScroller {
     element.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       this.cancelPendingLongPress();
+      if (element._suppressContextMenuUntil && Date.now() < element._suppressContextMenuUntil) {
+        return;
+      }
+      element._suppressClickUntil = Date.now() + 450;
       onAction(e);
     });
   }
@@ -582,6 +588,8 @@ export class VirtualMessageScroller {
 
       this.activeLongPressTimer = setTimeout(() => {
         if (!isSwiping && isPointerDown) {
+          row._suppressClickUntil = Date.now() + 700;
+          row._suppressContextMenuUntil = Date.now() + 700;
           onLongPress(e);
           this.activeLongPressTimer = null;
         }
@@ -679,6 +687,7 @@ export class VirtualMessageScroller {
 
         row.classList.remove('swiping-right');
         isSwiping = false;
+        row._suppressClickUntil = Date.now() + 250;
 
         if (reached && this.onMessageReply) {
           this.onMessageReply(msg);
@@ -716,6 +725,10 @@ export class VirtualMessageScroller {
       e.preventDefault();
       this.cancelPendingLongPress();
       finishPointerUp(e.clientX);
+      if (row._suppressContextMenuUntil && Date.now() < row._suppressContextMenuUntil) {
+        return;
+      }
+      row._suppressClickUntil = Date.now() + 450;
       onLongPress(e);
     });
   }
@@ -1325,6 +1338,12 @@ export class VirtualMessageScroller {
     });
 
     row.addEventListener('click', (e) => {
+      if (row._suppressClickUntil && Date.now() < row._suppressClickUntil) {
+        row._suppressClickUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (this.selectionMode && this.onMessageTapInSelection) {
         e.stopPropagation();
         this.onMessageTapInSelection(firstMsg, row, e);
@@ -1473,6 +1492,12 @@ export class VirtualMessageScroller {
     });
 
     row.addEventListener('click', (e) => {
+      if (row._suppressClickUntil && Date.now() < row._suppressClickUntil) {
+        row._suppressClickUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (this.selectionMode && this.onMessageTapInSelection) {
         e.stopPropagation();
         this.onMessageTapInSelection(msg, row, e);

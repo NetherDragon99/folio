@@ -372,7 +372,7 @@ export class HomeView {
 
     item.innerHTML = `
       <div class="chat-avatar-wrap">
-        ${chat.avatarBlob ? `<img src="${URL.createObjectURL(chat.avatarBlob)}" class="chat-avatar-img" />` : (chat.isGroup ? Icons.groupAvatar('', 50) : Icons.userAvatar('', 50))}
+        ${chat.avatarBlob instanceof Blob ? `<img src="${URL.createObjectURL(chat.avatarBlob)}" class="chat-avatar-img" />` : (chat.isGroup ? Icons.groupAvatar('', 50) : Icons.userAvatar('', 50))}
       </div>
       <div class="chat-main-wrap">
         <div class="chat-top-row">
@@ -394,18 +394,54 @@ export class HomeView {
 
     // Long press detection for selection mode
     let pressTimer = null;
+    let startX = 0;
+    let startY = 0;
     item.addEventListener('touchstart', (e) => {
+      startX = e.touches && e.touches[0] ? e.touches[0].clientX : 0;
+      startY = e.touches && e.touches[0] ? e.touches[0].clientY : 0;
+      if (pressTimer) clearTimeout(pressTimer);
       pressTimer = setTimeout(() => {
+        item._suppressClickUntil = Date.now() + 700;
+        item._suppressContextMenuUntil = Date.now() + 700;
         this.enterSelectionMode(chat.id);
+        pressTimer = null;
       }, 500);
     }, { passive: true });
 
+    item.addEventListener('touchmove', (e) => {
+      if (!pressTimer) return;
+      const curX = e.touches && e.touches[0] ? e.touches[0].clientX : 0;
+      const curY = e.touches && e.touches[0] ? e.touches[0].clientY : 0;
+      if (Math.hypot(curX - startX, curY - startY) > 10) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    }, { passive: true });
+
     item.addEventListener('touchend', () => {
-      if (pressTimer) clearTimeout(pressTimer);
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    });
+
+    item.addEventListener('touchcancel', () => {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
     });
 
     item.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+      if (item._suppressContextMenuUntil && Date.now() < item._suppressContextMenuUntil) {
+        return;
+      }
+      item._suppressClickUntil = Date.now() + 450;
       this.enterSelectionMode(chat.id);
     });
 
@@ -430,6 +466,12 @@ export class HomeView {
     // Item click (navigates to chat only when tapping outside the avatar)
     item.addEventListener('click', async (e) => {
       if (e.target.closest('.chat-avatar-wrap')) return;
+      if (item._suppressClickUntil && Date.now() < item._suppressClickUntil) {
+        item._suppressClickUntil = 0;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (this.isSelectionMode) {
         this.toggleItemSelection(chat.id);
       } else {
@@ -451,7 +493,7 @@ export class HomeView {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay floating-profile-modal-overlay active';
 
-    const avatarUrl = chat.avatarBlob ? URL.createObjectURL(chat.avatarBlob) : null;
+    const avatarUrl = chat.avatarBlob instanceof Blob ? URL.createObjectURL(chat.avatarBlob) : null;
 
     overlay.innerHTML = `
       <div class="floating-profile-card">
