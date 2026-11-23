@@ -37,6 +37,20 @@ export class Router {
       }
       this.handlePopState(e);
     });
+
+    // Re-arm 2-slot sentinel whenever PWA wakes from background / bfcache
+    window.addEventListener('pageshow', () => {
+      if (!this.isInternalNavigating) {
+        this.ensureSentinelGuard(this.currentHash || window.location.hash || '#/chats');
+      }
+    });
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && !this.isInternalNavigating) {
+          this.ensureSentinelGuard(this.currentHash || window.location.hash || '#/chats');
+        }
+      });
+    }
   }
 
   /**
@@ -66,8 +80,8 @@ export class Router {
       return '#/chats';
     }
 
-    // 3. Contact Info: '#/chat/:id/info' returns to '#/chat/:id'
-    const contactInfoMatch = pathPart.match(/^#\/chat\/([^\/]+)\/info$/);
+    // 3. Contact Info & Per-Chat Calls: '#/chat/:id/info' and '#/chat/:id/calls' return to '#/chat/:id'
+    const contactInfoMatch = pathPart.match(/^#\/chat\/([^\/]+)\/(?:info|calls)$/);
     if (contactInfoMatch) {
       const cId = contactInfoMatch[1];
       return `#/chat/${cId}`;
@@ -232,16 +246,20 @@ export class Router {
     return null;
   }
 
-  setupRootGuard() {
+  ensureSentinelGuard(targetHash = null) {
     try {
-      const currentHash = (window.location.hash || '#/chats').split('?')[0];
-      if (currentHash === '#/chats' || currentHash === '#/' || currentHash === '#' || currentHash === '') {
-        if (!window.history.state || window.history.state.guard !== 'active') {
-          window.history.replaceState({ guard: 'root', hash: '#/chats' }, '');
-          window.history.pushState({ guard: 'active', hash: '#/chats' }, '');
-        }
+      const hash = targetHash || this.currentHash || window.location.hash || '#/chats';
+      if (!window.history.state || window.history.state.guard !== 'active') {
+        window.history.replaceState({ guard: 'sentinel', hash }, '', hash);
+        window.history.pushState({ guard: 'active', hash }, '', hash);
+      } else if (window.history.state.hash !== hash) {
+        window.history.replaceState({ guard: 'active', hash }, '', hash);
       }
     } catch (e) {}
+  }
+
+  setupRootGuard() {
+    this.ensureSentinelGuard(this.currentHash || window.location.hash || '#/chats');
   }
 
   init() {
@@ -250,16 +268,14 @@ export class Router {
     this.currentHash = currentHash;
     this.historyStack = this.getAncestorChain(currentHash);
     this.saveHistoryStack();
-    this.setupRootGuard();
 
-    if (!rawHash) {
-      this.isInternalNavigating = true;
-      window.location.hash = '#/chats';
+    this.isInternalNavigating = true;
+    try {
+      this.ensureSentinelGuard(currentHash);
+    } finally {
       this.handleRoute().finally(() => {
         setTimeout(() => { this.isInternalNavigating = false; }, 50);
       });
-    } else {
-      this.handleRoute();
     }
   }
 
@@ -279,10 +295,12 @@ export class Router {
 
     this.isInternalNavigating = true;
     try {
-      if (options.replace) {
-        window.history.replaceState({ guard: 'active', hash }, '', hash);
-      } else {
+      // Strictly keep 2-slot sentinel ([sentinel, active]) — NEVER grow browser history stack!
+      if (!window.history.state || window.history.state.guard !== 'active') {
+        window.history.replaceState({ guard: 'sentinel', hash }, '', hash);
         window.history.pushState({ guard: 'active', hash }, '', hash);
+      } else {
+        window.history.replaceState({ guard: 'active', hash }, '', hash);
       }
       await this.handleRoute(direction);
     } finally {
@@ -483,7 +501,7 @@ export class Router {
       return;
     }
 
-    // 5. Navigate to parent cleanly with back animation
+    // 5. Navigate to parent cleanly with back animation (re-arming active slot above sentinel!)
     this._navDirection = 'back';
     this.historyStack = this.getAncestorChain(targetParent);
     this.saveHistoryStack();
@@ -491,7 +509,8 @@ export class Router {
 
     this.isInternalNavigating = true;
     try {
-      window.history.replaceState({ guard: 'active', hash: targetParent }, '', targetParent);
+      window.history.replaceState({ guard: 'sentinel', hash: targetParent }, '', targetParent);
+      window.history.pushState({ guard: 'active', hash: targetParent }, '', targetParent);
       this.handleRoute('back');
     } finally {
       setTimeout(() => {
@@ -757,7 +776,7 @@ export class Router {
         <div class="empty-state" style="padding: 40px 16px; text-align: center;">
           <h3 style="color: var(--wa-text-primary); margin-bottom: 8px;">Failed to load page</h3>
           <p style="color: var(--wa-text-secondary); margin-bottom: 20px;">${renderErr.message || 'An error occurred while opening this page.'}</p>
-          <button type="button" class="btn-chat-primary" onclick="window.router ? window.router.back() : (window.location.hash='#/chats')" style="padding: 10px 24px; border-radius: 20px; border: none; background: var(--app-accent, #25d366); color: #0b141a; font-weight: 600; cursor: pointer;">
+          <button type="button" class="btn-chat-primary" onclick="window.router ? window.router.back() : (window.location.hash='#/chats')" style="padding: 10px 24px; border-radius: 20px; border: none; background: var(--app-accent); color: var(--app-accent-fg); font-weight: 600; cursor: pointer;">
             Go Back
           </button>
         </div>

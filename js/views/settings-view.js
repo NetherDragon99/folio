@@ -22,9 +22,10 @@ export class SettingsView {
       let storageStats = { formattedSize: '0 B', chatCount: 0, messageCount: 0 };
       let defaultExpandLongMessages = false;
       let defaultNoteMode = false;
+      let enterToSend = localStorage.getItem('wa_enter_to_send') !== 'false';
       let persistenceInfo = { isPersisted: false };
       let backupStatus = { hasBackup: false, lastStats: null };
-      const appVersion = window.APP_VERSION || '2.3.12';
+      const appVersion = window.APP_VERSION || '2.3.13';
       const cacheStatus = window.__waCacheStatus || null;
       const updateState = (window.app && typeof window.app.getUpdateState === 'function')
         ? window.app.getUpdateState()
@@ -41,6 +42,8 @@ export class SettingsView {
         storageStats = await db.getStorageUsage();
         defaultExpandLongMessages = await db.getSetting('defaultExpandLongMessages', false);
         defaultNoteMode = await db.getSetting('defaultNoteMode', false);
+        enterToSend = await db.getSetting('enterToSend', true);
+        try { localStorage.setItem('wa_enter_to_send', enterToSend ? 'true' : 'false'); } catch (_) {}
         persistenceInfo = await db.getPersistenceInfo().catch(() => ({ isPersisted: false }));
         backupStatus = db.getBackupStatus();
       } catch (err) {
@@ -73,8 +76,8 @@ export class SettingsView {
                   <path d="M12 12c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-1.5c0-2.33-4.67-3.5-7-3.5zM20 4h-3.17L15 2H9L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 13c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/>
                 </svg>
               </div>
-              <input type="file" id="profile-file-input" accept="image/*" style="display:none;" />
             </div>
+            <input type="file" id="profile-file-input" accept="image/*" style="display:none;" />
             
             <div class="settings-profile-texts" id="btn-edit-name" title="Click to edit name">
               <div class="profile-name-row">
@@ -144,6 +147,18 @@ export class SettingsView {
               </div>
               <label class="switch-wrap">
                 <input type="checkbox" id="cb-default-note-mode" ${defaultNoteMode ? 'checked' : ''} />
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="settings-option-row" id="row-enter-to-send">
+              <span class="settings-icon">${Icons.enterKey('', 20)}</span>
+              <div class="settings-texts">
+                <div class="setting-title">Enter is send</div>
+                <div class="setting-sub">Enter key sends your message on desktop (Shift+Enter adds a new line)</div>
+              </div>
+              <label class="switch-wrap">
+                <input type="checkbox" id="cb-enter-to-send" ${enterToSend ? 'checked' : ''} />
                 <span class="switch-slider"></span>
               </label>
             </div>
@@ -320,7 +335,7 @@ export class SettingsView {
           </header>
           <div style="padding: 32px 16px; text-align: center;">
             <p style="color: var(--wa-text-secondary); margin-bottom: 16px;">Failed to load settings: ${err.message || 'Unknown error'}</p>
-            <button type="button" class="btn-chat-primary" onclick="window.location.hash='#/chats'" style="padding: 10px 24px; border-radius: 20px; border: none; background: var(--app-accent, #25d366); color: #0b141a; font-weight: 600; cursor: pointer;">
+            <button type="button" class="btn-chat-primary" onclick="window.location.hash='#/chats'" style="padding: 10px 24px; border-radius: 20px; border: none; background: var(--app-accent); color: var(--app-accent-fg); font-weight: 600; cursor: pointer;">
               Return to Chats
             </button>
           </div>
@@ -410,6 +425,16 @@ export class SettingsView {
       noteModeCb.addEventListener('change', async () => {
         await db.setSetting('defaultNoteMode', noteModeCb.checked);
         Toast.show(noteModeCb.checked ? 'Note mode enabled globally' : 'Note mode disabled by default');
+      });
+    }
+
+    // Enter is Send Toggle
+    const enterSendCb = this.container.querySelector('#cb-enter-to-send');
+    if (enterSendCb) {
+      enterSendCb.addEventListener('change', async () => {
+        await db.setSetting('enterToSend', enterSendCb.checked);
+        try { localStorage.setItem('wa_enter_to_send', enterSendCb.checked ? 'true' : 'false'); } catch (_) {}
+        Toast.show(enterSendCb.checked ? 'Enter key will send messages' : 'Enter key inserts a new line');
       });
     }
 
@@ -538,7 +563,7 @@ export class SettingsView {
     });
 
     // Check for Updates, Background Download Progress & Restart to Update
-    const appVersion = window.APP_VERSION || '2.3.12';
+    const appVersion = window.APP_VERSION || '2.3.13';
     const updateRow = this.container.querySelector('#row-check-updates');
     const updateSubEl = this.container.querySelector('#settings-update-status-sub');
     const updateReadyCard = this.container.querySelector('#settings-update-ready-card');

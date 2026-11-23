@@ -5,19 +5,35 @@
  *   6 highlight colors, underline, spoiler, superscript/subscript, code, blockquotes, and word hyperlinks
  * - Serializes cleanly to canonical markup for unlimited-length storage, search, and editing
  */
-import { HIGHLIGHT_COLORS, escapeHtml, sanitizeUrl } from '../utils/rich-text.js';
+import {
+  HIGHLIGHT_COLORS,
+  escapeHtml,
+  sanitizeUrl,
+  extractLineLayoutDirectives,
+  formatLineLayoutPrefix,
+  parseEmbedDirective
+} from '../utils/rich-text.js';
 
 export class RichComposer {
-  constructor(editorEl, { onChange = () => {}, onSelectionChange = () => {}, onSubmit = null } = {}) {
+  constructor(editorEl, {
+    onChange = () => {},
+    onSelectionChange = () => {},
+    onSubmit = null,
+    shouldEnterSend = null,
+    onEditInlineWhiteboard = null
+  } = {}) {
     this.el = editorEl;
     this.onChange = onChange;
     this.onSelectionChange = onSelectionChange;
     this.onSubmit = onSubmit;
+    this.shouldEnterSend = shouldEnterSend;
+    this.onEditInlineWhiteboard = onEditInlineWhiteboard;
 
     this._isComposing = false;
     this._suppressInput = false;
     this._savedRange = null;
     this._lastBulletType = 'bullet';
+    this._embedPreviewUrls = new Map();
     this._undoStack = [''];
     this._undoIdx = 0;
     this._maxHistory = 60;
@@ -71,6 +87,48 @@ export class RichComposer {
         const foldEl = foldRemove.closest('.rc-block[data-block="fold"]');
         if (foldEl) {
           this._unwrapFoldBlock(foldEl);
+        }
+        return;
+      }
+      const embedLayoutBtn = e.target.closest?.('.rc-embed-layout-btn');
+      if (embedLayoutBtn && this.el.contains(embedLayoutBtn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const emb = embedLayoutBtn.closest('.rc-block[data-block="embed"]');
+        const nextLayout = embedLayoutBtn.dataset.layout;
+        if (emb && nextLayout) {
+          emb.dataset.embedLayout = nextLayout;
+          emb.classList.remove('is-layout-full', 'is-layout-left', 'is-layout-right');
+          emb.classList.add(`is-layout-${nextLayout}`);
+          emb.querySelectorAll('.rc-embed-layout-btn').forEach((b) => {
+            b.classList.toggle('active', b.dataset.layout === nextLayout);
+          });
+          this._pushHistory();
+          this.onChange(this.getValue());
+        }
+        return;
+      }
+      const embedEditBtn = e.target.closest?.('.rc-embed-edit-btn');
+      if (embedEditBtn && this.el.contains(embedEditBtn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const emb = embedEditBtn.closest('.rc-block[data-block="embed"]');
+        if (emb && typeof this.onEditInlineWhiteboard === 'function') {
+          this.onEditInlineWhiteboard(emb.dataset.embedMediaId, emb);
+        }
+        return;
+      }
+      const embedRemoveBtn = e.target.closest?.('.rc-embed-remove-btn');
+      if (embedRemoveBtn && this.el.contains(embedRemoveBtn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const emb = embedRemoveBtn.closest('.rc-block[data-block="embed"]');
+        if (emb) {
+          emb.remove();
+          this._ensureAtLeastOneBlock();
+          this._pushHistory();
+          this.onChange(this.getValue());
+          this.onSelectionChange(this.getActiveFormats());
         }
         return;
       }
@@ -184,7 +242,51 @@ export class RichComposer {
   _syncEmptyState() {
     const val = this.getValue();
     const hasFold = Boolean(this.el.querySelector?.('.rc-fold'));
-    this.el.classList.toggle('is-empty', val.length === 0 && !hasFold);
+    const hasEmbed = Boolean(this.el.querySelector?.('.rc-embed'));
+    this.el.classList.toggle('is-empty', val.length === 0 && !hasFold && !hasEmbed);
+  }
+
+  scrollCaretIntoView() {
+    if (!this.el || typeof this.el.getBoundingClientRect !== 'function') return;
+    const run = () => {
+      if (!this.el) return;
+      const sel = window.getSelection?.();
+      if (!sel || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      if (!this.el.contains(range.startContainer)) return;
+
+      let targetRect = null;
+      const rects = range.getClientRects ? range.getClientRects() : [];
+      if (rects && rects.length > 0) {
+        targetRect = rects[rects.length - 1];
+      } else if (range.getBoundingClientRect) {
+        const br = range.getBoundingClientRect();
+        if (br && (br.height > 0 || br.top > 0 || br.bottom > 0)) {
+          targetRect = br;
+        }
+      }
+      if (!targetRect || (targetRect.top === 0 && targetRect.bottom === 0)) {
+        const blk = this._getBlockElement(range.startContainer);
+        if (blk && blk.getBoundingClientRect) {
+          targetRect = blk.getBoundingClientRect();
+        }
+      }
+      if (!targetRect) return;
+
+      const elRect = this.el.getBoundingClientRect();
+      const padBottom = 18;
+      const padTop = 10;
+      if (targetRect.bottom > elRect.bottom - padBottom) {
+        this.el.scrollTop += (targetRect.bottom - (elRect.bottom - padBottom));
+      } else if (targetRect.top < elRect.top + padTop) {
+        this.el.scrollTop -= ((elRect.top + padTop) - targetRect.top);
+      }
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(run);
+    } else {
+      run();
+    }
   }
 
   _syncOrderedNumbersInContainer(containerEl) {
@@ -318,9 +420,47 @@ export class RichComposer {
       return div;
     }
 
+    if (type === 'embed') {
+      const kind = options.kind || 'file';
+      const mediaId = String(options.mediaId || '');
+      const layout = options.layout || 'full';
+      const label = options.label || (kind === 'image' ? 'Photo' : (kind === 'audio' ? 'Voice note' : (kind === 'whiteboard' ? 'Whiteboard' : 'File')));
+      const previewUrl = options.previewUrl || this._embedPreviewUrls.get(mediaId) || '';
+      if (previewUrl && mediaId) this._embedPreviewUrls.set(mediaId, previewUrl);
+
+      const div = document.createElement('div');
+      div.className = `rc-block rc-embed is-layout-${layout}`;
+      div.dataset.block = 'embed';
+      div.dataset.embedKind = kind;
+      div.dataset.embedMediaId = mediaId;
+      div.dataset.embedLayout = layout;
+      div.dataset.embedLabel = label;
+      div.setAttribute('contenteditable', 'false');
+
+      const thumbHtml = (kind === 'image' || kind === 'whiteboard') && previewUrl
+        ? `<img src="${escapeHtml(previewUrl)}" class="rc-embed-thumb" alt="${escapeHtml(label)}" />`
+        : `<span class="rc-embed-icon">${kind === 'audio' ? '🎤' : (kind === 'whiteboard' ? '🎨' : (kind === 'image' ? '🖼' : '📎'))}</span>`;
+
+      div.innerHTML = `
+        <div class="rc-embed-drag-grip" title="Hold & drag to reorder">☰</div>
+        <div class="rc-embed-preview">${thumbHtml}<span class="rc-embed-label">${escapeHtml(label)}</span></div>
+        <div class="rc-embed-controls">
+          <button type="button" class="rc-embed-layout-btn ${layout === 'full' ? 'active' : ''}" data-layout="full" title="Full width">Full</button>
+          <button type="button" class="rc-embed-layout-btn ${layout === 'left' ? 'active' : ''}" data-layout="left" title="Float Left">L</button>
+          <button type="button" class="rc-embed-layout-btn ${layout === 'right' ? 'active' : ''}" data-layout="right" title="Float Right">R</button>
+          ${kind === 'whiteboard' ? `<button type="button" class="rc-embed-edit-btn" title="Edit Whiteboard">✎</button>` : ''}
+          <button type="button" class="rc-embed-remove-btn" title="Remove">×</button>
+        </div>
+      `;
+
+      this._attachEmbedDragReorder(div);
+      return div;
+    }
+
     const div = document.createElement('div');
     div.className = `rc-block rc-${type}`;
     div.dataset.block = type;
+    this._applyBlockLayoutAttrs(div, options.align || null, options.dir || null);
     if (type === 'ul' || type === 'ol' || type === 'check') {
       div.dataset.indent = String(indent);
     }
@@ -355,6 +495,191 @@ export class RichComposer {
       div.appendChild(document.createElement('br'));
     }
     return div;
+  }
+
+  _applyBlockLayoutAttrs(blockEl, align = null, dir = null) {
+    if (!blockEl) return;
+    blockEl.classList.remove('rc-align-left', 'rc-align-center', 'rc-align-right');
+    if (align === 'left' || align === 'center' || align === 'right') {
+      blockEl.dataset.align = align;
+      blockEl.classList.add(`rc-align-${align}`);
+    } else {
+      delete blockEl.dataset.align;
+    }
+    if (dir === 'ltr' || dir === 'rtl') {
+      blockEl.dataset.dir = dir;
+      blockEl.setAttribute('dir', dir);
+    } else {
+      delete blockEl.dataset.dir;
+      blockEl.setAttribute('dir', 'auto');
+    }
+  }
+
+  _attachEmbedDragReorder(embedEl) {
+    if (!embedEl) return;
+    let holdTimer = null;
+    let startX = 0;
+    let startY = 0;
+    let dragging = false;
+    let placeholder = null;
+    let siblingBlocks = [];
+    let currentSlot = 0;
+    let dragRect = null;
+    let autoScrollRaf = null;
+    let latestClientY = 0;
+
+    const flipMovePlaceholder = (nextSlot, parentContainer) => {
+      if (!placeholder || !parentContainer) return;
+      const beforeTops = siblingBlocks.map((b) => b.getBoundingClientRect().top);
+      if (nextSlot >= siblingBlocks.length) {
+        parentContainer.appendChild(placeholder);
+      } else {
+        parentContainer.insertBefore(placeholder, siblingBlocks[nextSlot]);
+      }
+      siblingBlocks.forEach((b, idx) => {
+        const delta = beforeTops[idx] - b.getBoundingClientRect().top;
+        if (Math.abs(delta) > 0.5) {
+          b.style.transition = 'none';
+          b.style.transform = `translateY(${delta}px)`;
+          requestAnimationFrame(() => {
+            b.style.transition = 'transform 190ms cubic-bezier(0.2, 0.9, 0.3, 1)';
+            b.style.transform = '';
+          });
+        }
+      });
+    };
+
+    embedEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (e.target.closest('button')) return;
+      const parentContainer = embedEl.parentNode;
+      if (!parentContainer) return;
+
+      startX = e.clientX;
+      startY = e.clientY;
+      latestClientY = startY;
+      const isGrip = Boolean(e.target.closest('.rc-embed-drag-grip'));
+      const delayMs = isGrip ? 60 : 280;
+
+      const startDrag = () => {
+        dragging = true;
+        dragRect = embedEl.getBoundingClientRect();
+        const allChildren = Array.from(parentContainer.querySelectorAll(':scope > .rc-block'));
+        currentSlot = Math.max(0, allChildren.indexOf(embedEl));
+        siblingBlocks = allChildren.filter((b) => b !== embedEl);
+
+        placeholder = document.createElement('div');
+        placeholder.className = 'rc-embed-drop-gap';
+        placeholder.style.height = `${Math.max(44, Math.round(dragRect.height))}px`;
+        if (currentSlot >= siblingBlocks.length) {
+          parentContainer.appendChild(placeholder);
+        } else {
+          parentContainer.insertBefore(placeholder, siblingBlocks[currentSlot]);
+        }
+
+        embedEl.classList.add('is-embed-dragging');
+        embedEl.style.position = 'fixed';
+        embedEl.style.left = `${Math.round(dragRect.left)}px`;
+        embedEl.style.top = `${Math.round(dragRect.top - 4)}px`;
+        embedEl.style.width = `${Math.round(dragRect.width)}px`;
+        embedEl.style.zIndex = '1200';
+
+        const scrollLoop = () => {
+          if (!dragging || !this.el) return;
+          const r = this.el.getBoundingClientRect();
+          if (latestClientY < r.top + 36) this.el.scrollTop -= 7;
+          else if (latestClientY > r.bottom - 36) this.el.scrollTop += 7;
+          autoScrollRaf = requestAnimationFrame(scrollLoop);
+        };
+        autoScrollRaf = requestAnimationFrame(scrollLoop);
+      };
+
+      holdTimer = setTimeout(startDrag, delayMs);
+
+      const onMove = (ev) => {
+        latestClientY = ev.clientY;
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!dragging) {
+          if (Math.hypot(dx, dy) > 8) {
+            clearTimeout(holdTimer);
+            holdTimer = null;
+            if (isGrip) startDrag();
+            else cleanup(true);
+          }
+          return;
+        }
+        ev.preventDefault();
+        const floatTop = dragRect.top + dy - 4;
+        embedEl.style.top = `${Math.round(floatTop)}px`;
+        embedEl.style.left = `${Math.round(dragRect.left + dx * 0.15)}px`;
+
+        const centerY = floatTop + dragRect.height / 2;
+        let nextSlot = siblingBlocks.length;
+        for (let i = 0; i < siblingBlocks.length; i++) {
+          const r = siblingBlocks[i].getBoundingClientRect();
+          if (centerY < r.top + r.height / 2) {
+            nextSlot = i;
+            break;
+          }
+        }
+        if (nextSlot !== currentSlot) {
+          flipMovePlaceholder(nextSlot, parentContainer);
+          currentSlot = nextSlot;
+        }
+      };
+
+      const cleanup = (cancelled = false) => {
+        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        if (autoScrollRaf) { cancelAnimationFrame(autoScrollRaf); autoScrollRaf = null; }
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onCancel);
+
+        if (!dragging) return;
+        dragging = false;
+
+        const targetRect = placeholder ? placeholder.getBoundingClientRect() : dragRect;
+        const finishSettle = () => {
+          embedEl.classList.remove('is-embed-dragging');
+          embedEl.style.position = '';
+          embedEl.style.left = '';
+          embedEl.style.top = '';
+          embedEl.style.width = '';
+          embedEl.style.zIndex = '';
+          embedEl.style.transition = '';
+          siblingBlocks.forEach((b) => { b.style.transition = ''; b.style.transform = ''; });
+          if (placeholder && placeholder.parentNode) {
+            if (!cancelled) {
+              placeholder.replaceWith(embedEl);
+            } else {
+              placeholder.remove();
+            }
+          }
+          placeholder = null;
+          this._ensureAtLeastOneBlock();
+          if (!cancelled) {
+            this._pushHistory();
+            this.onChange(this.getValue());
+          }
+        };
+
+        if (!cancelled && targetRect) {
+          embedEl.style.transition = 'top 190ms cubic-bezier(0.22, 1, 0.36, 1), left 190ms cubic-bezier(0.22, 1, 0.36, 1), transform 190ms ease';
+          embedEl.style.top = `${Math.round(targetRect.top)}px`;
+          embedEl.style.left = `${Math.round(targetRect.left)}px`;
+          setTimeout(finishSettle, 195);
+        } else {
+          finishSettle();
+        }
+      };
+
+      const onUp = () => cleanup(false);
+      const onCancel = () => cleanup(true);
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onCancel);
+    });
   }
 
   _placeCaretAtEnd(node) {
@@ -433,40 +758,53 @@ export class RichComposer {
         continue;
       }
 
+      if (blockType === 'embed') {
+        olCounters.clear();
+        const kind = node.dataset?.embedKind || 'file';
+        const mediaId = node.dataset?.embedMediaId || '';
+        const layout = node.dataset?.embedLayout || 'full';
+        const label = (node.dataset?.embedLabel || '').replace(/[\]\r\n]/g, '').trim();
+        if (mediaId) {
+          outLines.push(label ? `[embed:${kind}:${mediaId}:${layout}|${label}]` : `[embed:${kind}:${mediaId}:${layout}]`);
+        }
+        continue;
+      }
+
       const body = this._getBlockBodyEl(node);
       const inlineStr = this._serializeChildren(body).replace(/\u200B/g, '').replace(/\u00A0/g, ' ').replace(/\n+$/, '');
       const indent = Number(node.dataset?.indent || 0);
       const pad = '  '.repeat(Math.max(0, indent));
+      const layoutPrefix = formatLineLayoutPrefix(node.dataset?.align || null, node.dataset?.dir || null);
 
       if (blockType === 'h1') {
         olCounters.clear();
-        outLines.push(`# ${inlineStr}`);
+        outLines.push(`${layoutPrefix}# ${inlineStr}`);
       } else if (blockType === 'h2') {
         olCounters.clear();
-        outLines.push(`## ${inlineStr}`);
+        outLines.push(`${layoutPrefix}## ${inlineStr}`);
       } else if (blockType === 'h3') {
         olCounters.clear();
-        outLines.push(`### ${inlineStr}`);
+        outLines.push(`${layoutPrefix}### ${inlineStr}`);
       } else if (blockType === 'quote') {
         olCounters.clear();
-        outLines.push(`> ${inlineStr}`);
+        outLines.push(`${layoutPrefix}> ${inlineStr}`);
       } else if (blockType === 'ul') {
         const shape = node.dataset?.bulletType || 'bullet';
         const prefix = shape === 'arrow' ? '-> ' : (shape === 'branch' ? '↳ ' : '- ');
-        outLines.push(`${pad}${prefix}${inlineStr}`);
+        outLines.push(`${layoutPrefix}${pad}${prefix}${inlineStr}`);
       } else if (blockType === 'ol') {
         for (const k of Array.from(olCounters.keys())) {
           if (k > indent) olCounters.delete(k);
         }
         const num = (olCounters.get(indent) || 0) + 1;
         olCounters.set(indent, num);
-        outLines.push(`${pad}${num}. ${inlineStr}`);
+        outLines.push(`${layoutPrefix}${pad}${num}. ${inlineStr}`);
       } else if (blockType === 'check') {
         const checked = node.dataset?.checked === 'true';
-        outLines.push(`${pad}[${checked ? 'x' : ' '}] ${inlineStr}`);
+        outLines.push(`${layoutPrefix}${pad}[${checked ? 'x' : ' '}] ${inlineStr}`);
       } else {
         olCounters.clear();
-        outLines.push(inlineStr);
+        outLines.push(`${layoutPrefix}${inlineStr}`);
       }
     }
 
@@ -502,7 +840,8 @@ export class RichComposer {
         } else if (tag === 'U' || child.dataset?.fmt === 'underline') {
           result += `++${inner}++`;
         } else if (tag === 'CODE') {
-          result += `\`${inner}\``;
+          const plainCode = (child.textContent || '').replace(/\u200B/g, '').replace(/\u00A0/g, ' ').replace(/`/g, '');
+          if (plainCode) result += `\`${plainCode}\``;
         } else if (tag === 'MARK') {
           const code = child.dataset?.hlColor || 'y';
           result += code === 'y' ? `==${inner}==` : `==${code}:${inner}==`;
@@ -536,7 +875,18 @@ export class RichComposer {
 
     const lines = raw.split('\n');
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      const originalLine = lines[i];
+
+      const embedMeta = parseEmbedDirective(originalLine);
+      if (embedMeta) {
+        const blk = this._makeBlockEl('embed', embedMeta);
+        containerEl.appendChild(blk);
+        continue;
+      }
+
+      const layoutMeta = extractLineLayoutDirectives(originalLine);
+      const line = layoutMeta.content;
+      const layoutOpts = { align: layoutMeta.align, dir: layoutMeta.dir };
 
       const foldMatch = line.match(/^(\s*)\[fold:([^\]\n]+)\](.*)$/);
       if (foldMatch && containerEl === this.el) {
@@ -586,6 +936,7 @@ export class RichComposer {
       if (checkMatch) {
         const indent = Math.min(3, Math.floor(checkMatch[1].replace(/\t/g, '  ').length / 2));
         const blk = this._makeBlockEl('check', {
+          ...layoutOpts,
           indent,
           checked: checkMatch[2].toLowerCase() === 'x'
         });
@@ -597,7 +948,7 @@ export class RichComposer {
       const headerMatch = line.match(/^(#{1,3})\s+(.+)$/);
       if (headerMatch) {
         const type = `h${headerMatch[1].length}`;
-        const blk = this._makeBlockEl(type);
+        const blk = this._makeBlockEl(type, layoutOpts);
         this._populateInlineNodes(blk, headerMatch[2]);
         containerEl.appendChild(blk);
         continue;
@@ -605,7 +956,7 @@ export class RichComposer {
 
       const quoteMatch = line.match(/^\s*>\s?(.*)$/);
       if (quoteMatch && /^\s*>/.test(line)) {
-        const blk = this._makeBlockEl('quote');
+        const blk = this._makeBlockEl('quote', layoutOpts);
         this._populateInlineNodes(blk, quoteMatch[1]);
         containerEl.appendChild(blk);
         continue;
@@ -615,7 +966,7 @@ export class RichComposer {
       if (ulMatch) {
         const indent = Math.min(3, Math.floor(ulMatch[1].replace(/\t/g, '  ').length / 2));
         const shape = ulMatch[2] ? 'arrow' : (ulMatch[3] ? 'branch' : 'bullet');
-        const blk = this._makeBlockEl('ul', { indent, bulletType: shape });
+        const blk = this._makeBlockEl('ul', { ...layoutOpts, indent, bulletType: shape });
         this._populateInlineNodes(this._getBlockBodyEl(blk), ulMatch[4]);
         containerEl.appendChild(blk);
         continue;
@@ -624,13 +975,13 @@ export class RichComposer {
       const olMatch = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
       if (olMatch) {
         const indent = Math.min(3, Math.floor(olMatch[1].replace(/\t/g, '  ').length / 2));
-        const blk = this._makeBlockEl('ol', { indent });
+        const blk = this._makeBlockEl('ol', { ...layoutOpts, indent });
         this._populateInlineNodes(this._getBlockBodyEl(blk), olMatch[3]);
         containerEl.appendChild(blk);
         continue;
       }
 
-      const blk = this._makeBlockEl('p');
+      const blk = this._makeBlockEl('p', layoutOpts);
       this._populateInlineNodes(blk, line);
       containerEl.appendChild(blk);
     }
@@ -805,6 +1156,7 @@ export class RichComposer {
     this._ensureAtLeastOneBlock();
     this._pushHistory();
     this._saveSelection();
+    this.scrollCaretIntoView();
     const val = this.getValue();
     this.onChange(val);
     this.onSelectionChange(this.getActiveFormats());
@@ -1115,10 +1467,45 @@ export class RichComposer {
       }
     }
 
-    // Enter handling for custom blocks & live Fold blocks
-    if (e.key === 'Enter' && !e.shiftKey && blockEl) {
+    // Enter handling: Desktop Enter-to-send vs Shift+Enter newline, plus alignment/direction inheritance
+    if (e.key === 'Enter' && !this._isComposing && !e.isComposing) {
+      const bType = blockEl?.dataset?.block || 'p';
+
+      // Ctrl+Enter / Cmd+Enter always submits if callback present
+      if ((e.ctrlKey || e.metaKey) && typeof this.onSubmit === 'function') {
+        e.preventDefault();
+        this.onSubmit();
+        return;
+      }
+
+      // Desktop Enter-to-send (when enabled, Shift NOT held, outside codeblock/foldTitle, and not typing raw [fold:...])
+      const isRawFoldLine = !enclosingFold && bType === 'p' && blockEl && /^\[fold:([^\]\n]+)\]$/.test(
+        this._serializeChildren(blockEl).replace(/\u200B/g, '').replace(/\u00A0/g, ' ').trim()
+      );
+      if (
+        !e.shiftKey &&
+        !foldTitleEl &&
+        bType !== 'codeblock' &&
+        !isRawFoldLine &&
+        typeof this.shouldEnterSend === 'function' &&
+        this.shouldEnterSend() &&
+        typeof this.onSubmit === 'function'
+      ) {
+        e.preventDefault();
+        this.onSubmit();
+        return;
+      }
+    }
+
+    if (e.key === 'Enter' && blockEl) {
       const bType = blockEl.dataset?.block;
+      const inheritedLayout = {
+        align: blockEl.dataset?.align || null,
+        dir: blockEl.dataset?.dir || null
+      };
+
       if (bType === 'codeblock') {
+        this.scrollCaretIntoView();
         return; // Allow newlines natively inside code block
       }
 
@@ -1133,6 +1520,7 @@ export class RichComposer {
         const firstBlk = foldBody?.firstElementChild;
         const firstTarget = this._getBlockBodyEl(firstBlk) || foldBody;
         this._placeCaretAtStart(firstTarget?.firstChild || firstTarget);
+        this.scrollCaretIntoView();
         this.onSelectionChange(this.getActiveFormats());
         return;
       }
@@ -1153,6 +1541,7 @@ export class RichComposer {
           this._placeCaretAtStart(target.firstChild || target);
           this._syncOrderedNumbers();
           this._pushHistory();
+          this.scrollCaretIntoView();
           this.onChange(this.getValue());
           this.onSelectionChange(this.getActiveFormats());
           return;
@@ -1169,11 +1558,12 @@ export class RichComposer {
           let outsideP = enclosingFold.nextElementSibling;
           const isOutsideEmptyP = outsideP && outsideP.dataset?.block === 'p' && !this._serializeChildren(outsideP).replace(/\u200B/g, '').trim();
           if (!isOutsideEmptyP) {
-            outsideP = this._makeBlockEl('p');
+            outsideP = this._makeBlockEl('p', inheritedLayout);
             enclosingFold.after(outsideP);
           }
           this._placeCaretAtStart(outsideP.firstChild || outsideP);
           this._pushHistory();
+          this.scrollCaretIntoView();
           this.onChange(this.getValue());
           this.onSelectionChange(this.getActiveFormats());
           return;
@@ -1200,7 +1590,7 @@ export class RichComposer {
           blockEl.innerHTML = '';
           blockEl.appendChild(document.createElement('br'));
         }
-        const nextP = this._makeBlockEl('p');
+        const nextP = this._makeBlockEl('p', inheritedLayout);
         const hasTailContent = Boolean(
           tailFrag &&
           Array.from(tailFrag.childNodes).some((n) =>
@@ -1218,23 +1608,25 @@ export class RichComposer {
         blockEl.after(nextP);
         this._placeCaretAtStart(nextP.firstChild || nextP);
         this._pushHistory();
+        this.scrollCaretIntoView();
         this.onChange(this.getValue());
         this.onSelectionChange(this.getActiveFormats());
         return;
       }
 
-      if (bType === 'ul' || bType === 'ol' || bType === 'check' || bType === 'h1' || bType === 'h2' || bType === 'h3' || bType === 'quote') {
+      if (bType === 'ul' || bType === 'ol' || bType === 'check' || bType === 'h1' || bType === 'h2' || bType === 'h3' || bType === 'quote' || bType === 'p') {
         e.preventDefault();
         const body = this._getBlockBodyEl(blockEl);
         const cleanText = this._serializeChildren(body).replace(/\u200B/g, '').trim();
 
-        // Empty list/quote item exits back to normal paragraph
+        // Empty list/quote item exits back to normal paragraph (preserving align/dir)
         if (!cleanText && (bType === 'ul' || bType === 'ol' || bType === 'check' || bType === 'quote')) {
-          const p = this._makeBlockEl('p');
+          const p = this._makeBlockEl('p', inheritedLayout);
           blockEl.replaceWith(p);
           this._syncOrderedNumbers();
           this._placeCaretAtStart(p);
           this._pushHistory();
+          this.scrollCaretIntoView();
           this.onChange(this.getValue());
           this.onSelectionChange(this.getActiveFormats());
           return;
@@ -1266,7 +1658,7 @@ export class RichComposer {
         const nextType = (bType === 'ul' || bType === 'ol' || bType === 'check') ? bType : 'p';
         const indent = Number(blockEl.dataset.indent || 0);
         const bulletType = bType === 'ul' ? (blockEl.dataset.bulletType || this._lastBulletType || 'bullet') : undefined;
-        const nextBlock = this._makeBlockEl(nextType, { indent, checked: false, bulletType });
+        const nextBlock = this._makeBlockEl(nextType, { ...inheritedLayout, indent, checked: false, bulletType });
         const nextBody = this._getBlockBodyEl(nextBlock);
 
         const hasTailContent = Boolean(
@@ -1288,6 +1680,7 @@ export class RichComposer {
         this._syncOrderedNumbers();
         this._placeCaretAtStart(nextBody);
         this._pushHistory();
+        this.scrollCaretIntoView();
         this.onChange(this.getValue());
         this.onSelectionChange(this.getActiveFormats());
         return;
@@ -1450,6 +1843,88 @@ export class RichComposer {
     return false;
   }
 
+  _findMatchingInlineTagsIn(rootEl, type) {
+    const matches = [];
+    if (!rootEl) return matches;
+    const walk = (node) => {
+      if (!node) return;
+      if (node.nodeType === 1) {
+        if (this._matchesInlineType(node, type)) {
+          matches.push(node);
+        }
+        for (const ch of Array.from(node.childNodes)) {
+          walk(ch);
+        }
+      } else if (node.childNodes && node.childNodes.length) {
+        for (const ch of Array.from(node.childNodes)) {
+          walk(ch);
+        }
+      }
+    };
+    walk(rootEl);
+    return matches;
+  }
+
+  _hasUnformattedText(node, type, insideMatch = false) {
+    if (!node) return false;
+    if (node.nodeType === 3) {
+      const clean = (node.nodeValue || '').replace(/[\u200B\u00A0\s]/g, '');
+      return clean.length > 0 && !insideMatch;
+    }
+    if (node.nodeType === 1) {
+      if (node.tagName === 'BR' || node.getAttribute?.('contenteditable') === 'false') return false;
+      const nowInside = insideMatch || this._matchesInlineType(node, type);
+      for (const ch of Array.from(node.childNodes)) {
+        if (this._hasUnformattedText(ch, type, nowInside)) return true;
+      }
+      return false;
+    }
+    if (node.childNodes) {
+      for (const ch of Array.from(node.childNodes)) {
+        if (this._hasUnformattedText(ch, type, insideMatch)) return true;
+      }
+    }
+    return false;
+  }
+
+  _cleanupEmptyInlineTags(container) {
+    if (!container) return;
+    const inlineTags = new Set(['STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'STRIKE', 'U', 'CODE', 'MARK', 'SUP', 'SUB', 'SPAN']);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const els = Array.from(container.querySelectorAll('*'));
+      for (const el of els) {
+        if (el.getAttribute('contenteditable') === 'false') continue;
+        if (el.classList?.contains('rc-block') || el.classList?.contains('rc-item-body') || el.classList?.contains('rc-fold-body') || el.classList?.contains('rc-fold-title') || el.classList?.contains('rc-fold-header')) continue;
+        if (!inlineTags.has(el.tagName)) continue;
+        const cleanTxt = (el.textContent || '').replace(/\u200B/g, '');
+        if (!cleanTxt && !el.querySelector('br')) {
+          el.remove();
+          changed = true;
+        }
+      }
+    }
+  }
+
+  _wrapLeafTextNodesWithCode(fragment) {
+    const textNodes = [];
+    const collect = (n) => {
+      if (!n) return;
+      if (n.nodeType === 3) {
+        if ((n.nodeValue || '').replace(/\u200B/g, '').length > 0) textNodes.push(n);
+      } else if (n.childNodes) {
+        for (const ch of Array.from(n.childNodes)) collect(ch);
+      }
+    };
+    collect(fragment);
+    for (const tn of textNodes) {
+      const codeEl = this._createInlineTag('code');
+      tn.parentNode.insertBefore(codeEl, tn);
+      codeEl.appendChild(tn);
+    }
+  }
+
   toggleInline(type, param = null) {
     this.restoreSelection();
     const sel = window.getSelection();
@@ -1457,12 +1932,39 @@ export class RichComposer {
     const range = sel.getRangeAt(0);
     if (!this.el.contains(range.commonAncestorContainer)) return;
 
-    // 1. Check if caret/selection is already inside matching inline tag -> unwrap or update color
+    const foldTitleEl = this._getFoldTitleEl(range.startContainer);
+    const blockEl = this._getBlockElement(range.startContainer);
+    const bodyEl = foldTitleEl || (blockEl?.dataset?.block === 'fold' || blockEl?.dataset?.block === 'embed' ? null : this._getBlockBodyEl(blockEl));
+    if (!bodyEl) return;
+
+    const finishToggle = (selectNodeOrRange = null) => {
+      this._cleanupEmptyInlineTags(bodyEl);
+      if (selectNodeOrRange) {
+        try {
+          if (selectNodeOrRange instanceof Range) {
+            sel.removeAllRanges();
+            sel.addRange(selectNodeOrRange);
+          } else if (selectNodeOrRange.isConnected) {
+            const r = document.createRange();
+            r.selectNodeContents(selectNodeOrRange);
+            sel.removeAllRanges();
+            sel.addRange(r);
+          }
+        } catch (_) {}
+      }
+      this._saveSelection();
+      this._pushHistory();
+      this.scrollCaretIntoView();
+      this.onChange(this.getValue());
+      this.onSelectionChange(this.getActiveFormats());
+    };
+
+    // 1. Check ancestor inline tag matching `type`
     let ancestor = range.commonAncestorContainer.nodeType === 1
       ? range.commonAncestorContainer
       : range.commonAncestorContainer.parentNode;
     let existingTag = null;
-    while (ancestor && ancestor !== this.el) {
+    while (ancestor && ancestor !== this.el && ancestor !== bodyEl) {
       if (this._matchesInlineType(ancestor, type)) {
         existingTag = ancestor;
         break;
@@ -1471,72 +1973,160 @@ export class RichComposer {
     }
 
     if (existingTag) {
-      if (type === 'highlight' && param) {
-        if (param === 'none') {
-          this._unwrapElement(existingTag);
-        } else if (existingTag.dataset.hlColor !== param) {
-          const colorDef = HIGHLIGHT_COLORS[param] || HIGHLIGHT_COLORS.y;
-          existingTag.className = `wa-hl wa-hl-${colorDef.name}`;
-          existingTag.dataset.hlColor = param;
-        } else {
-          this._unwrapElement(existingTag);
-        }
-      } else {
-        this._unwrapElement(existingTag);
+      if (type === 'highlight' && param && param !== 'none' && existingTag.dataset.hlColor !== param) {
+        const colorDef = HIGHLIGHT_COLORS[param] || HIGHLIGHT_COLORS.y;
+        existingTag.className = `wa-hl wa-hl-${colorDef.name}`;
+        existingTag.dataset.hlColor = param;
+        finishToggle(existingTag);
+        return;
       }
-      this._pushHistory();
-      this.onChange(this.getValue());
-      this.onSelectionChange(this.getActiveFormats());
+
+      const cleanTagText = (existingTag.textContent || '').replace(/\u200B/g, '');
+      const cleanSelText = range.collapsed ? '' : range.toString().replace(/\u200B/g, '');
+      // Partial selection inside existingTag -> split into [before][unwrappedSel][after]
+      if (!range.collapsed && cleanSelText.length > 0 && cleanSelText.length < cleanTagText.length) {
+        const beforeRange = document.createRange();
+        beforeRange.selectNodeContents(existingTag);
+        beforeRange.setEnd(range.startContainer, range.startOffset);
+        const beforeFrag = beforeRange.cloneContents();
+
+        const afterRange = document.createRange();
+        afterRange.selectNodeContents(existingTag);
+        afterRange.setStart(range.endContainer, range.endOffset);
+        const afterFrag = afterRange.cloneContents();
+
+        const midFrag = range.cloneContents();
+        this._findMatchingInlineTagsIn(midFrag, type).forEach((m) => this._unwrapElement(m));
+
+        const parent = existingTag.parentNode;
+        const markerStart = document.createTextNode('');
+        const markerEnd = document.createTextNode('');
+
+        if ((beforeFrag.textContent || '').replace(/\u200B/g, '').length > 0) {
+          const bWrap = existingTag.cloneNode(false);
+          bWrap.appendChild(beforeFrag);
+          parent.insertBefore(bWrap, existingTag);
+        }
+        parent.insertBefore(markerStart, existingTag);
+        parent.insertBefore(midFrag, existingTag);
+        parent.insertBefore(markerEnd, existingTag);
+        if ((afterFrag.textContent || '').replace(/\u200B/g, '').length > 0) {
+          const aWrap = existingTag.cloneNode(false);
+          aWrap.appendChild(afterFrag);
+          parent.insertBefore(aWrap, existingTag);
+        }
+        parent.removeChild(existingTag);
+
+        const newR = document.createRange();
+        newR.setStartAfter(markerStart);
+        newR.setEndBefore(markerEnd);
+        markerStart.remove();
+        markerEnd.remove();
+        finishToggle(newR);
+        return;
+      }
+
+      // Full unwrap of existingTag + any duplicate nested matching tags inside it
+      const firstChild = existingTag.firstChild;
+      const lastChild = existingTag.lastChild;
+      this._findMatchingInlineTagsIn(existingTag, type).forEach((m) => {
+        if (m !== existingTag) this._unwrapElement(m);
+      });
+      this._unwrapElement(existingTag);
+      if (firstChild && lastChild && firstChild.isConnected && lastChild.isConnected) {
+        const newR = document.createRange();
+        newR.setStartBefore(firstChild);
+        newR.setEndAfter(lastChild);
+        if (range.collapsed) newR.collapse(false);
+        finishToggle(newR);
+      } else {
+        finishToggle();
+      }
       return;
     }
 
-    if (type === 'highlight' && param === 'none') return;
-
-    // 2. Wrap selected text (or entire line/block if collapsed)
-    const wrapper = this._createInlineTag(type, param);
-    if (!wrapper) return;
-
+    // 2. Build target range (selected text, OR entire line body if collapsed)
+    const targetRange = range.cloneRange();
     if (range.collapsed) {
-      const foldTitleEl = this._getFoldTitleEl(range.startContainer);
-      const blockEl = this._getBlockElement(range.startContainer);
-      const bodyEl = foldTitleEl || (blockEl?.dataset?.block === 'fold' ? null : this._getBlockBodyEl(blockEl));
-      const textLen = (bodyEl?.textContent || '').replace(/\u200B/g, '').trim().length;
-      if (bodyEl && textLen > 0) {
-        range.selectNodeContents(bodyEl);
-        if (bodyEl.lastChild && bodyEl.lastChild.nodeName === 'BR') {
-          range.setEndBefore(bodyEl.lastChild);
-        }
-        const contents = range.extractContents();
-        wrapper.appendChild(contents);
-        range.insertNode(wrapper);
-        const r = document.createRange();
-        r.selectNodeContents(wrapper);
-        sel.removeAllRanges();
-        sel.addRange(r);
-      } else {
+      const textLen = (bodyEl.textContent || '').replace(/\u200B/g, '').trim().length;
+      if (textLen === 0) {
+        if (type === 'highlight' && param === 'none') return;
+        const wrapper = this._createInlineTag(type, param);
+        if (!wrapper) return;
         const innerText = document.createTextNode('text');
         wrapper.appendChild(innerText);
         range.insertNode(wrapper);
         const trail = document.createTextNode('\u200B');
         wrapper.after(trail);
-        const r = document.createRange();
-        r.selectNodeContents(wrapper);
-        sel.removeAllRanges();
-        sel.addRange(r);
+        finishToggle(wrapper);
+        return;
       }
-    } else {
-      const contents = range.extractContents();
-      wrapper.appendChild(contents);
-      range.insertNode(wrapper);
-      const r = document.createRange();
-      r.selectNodeContents(wrapper);
-      sel.removeAllRanges();
-      sel.addRange(r);
+      targetRange.selectNodeContents(bodyEl);
+      if (bodyEl.lastChild && bodyEl.lastChild.nodeName === 'BR') {
+        targetRange.setEndBefore(bodyEl.lastChild);
+      }
     }
 
-    this._pushHistory();
-    this.onChange(this.getValue());
-    this.onSelectionChange(this.getActiveFormats());
+    // 3. Inspect descendants inside targetRange: if ALREADY fully formatted with `type`, UNWRAP cleanly!
+    const probeFrag = targetRange.cloneContents();
+    const descendantMatches = this._findMatchingInlineTagsIn(probeFrag, type);
+    const hasPlainText = this._hasUnformattedText(probeFrag, type, false);
+
+    if (descendantMatches.length > 0 && (!hasPlainText || (type === 'highlight' && param === 'none'))) {
+      const extracted = targetRange.extractContents();
+      const liveMatches = this._findMatchingInlineTagsIn(extracted, type);
+      if (type === 'highlight' && param && param !== 'none' && liveMatches.some((m) => m.dataset.hlColor !== param)) {
+        const colorDef = HIGHLIGHT_COLORS[param] || HIGHLIGHT_COLORS.y;
+        liveMatches.forEach((m) => {
+          m.className = `wa-hl wa-hl-${colorDef.name}`;
+          m.dataset.hlColor = param;
+        });
+      } else {
+        // Unwrap bottom-up
+        liveMatches.reverse().forEach((m) => this._unwrapElement(m));
+      }
+      const startPin = document.createTextNode('');
+      const endPin = document.createTextNode('');
+      targetRange.insertNode(endPin);
+      targetRange.insertNode(extracted);
+      targetRange.insertNode(startPin);
+      const newR = document.createRange();
+      newR.setStartAfter(startPin);
+      newR.setEndBefore(endPin);
+      startPin.remove();
+      endPin.remove();
+      finishToggle(newR);
+      return;
+    }
+
+    if (type === 'highlight' && param === 'none') return;
+
+    // 4. Apply format cleanly (stripping any inner duplicates so double-wrapping is impossible!)
+    const contents = targetRange.extractContents();
+    this._findMatchingInlineTagsIn(contents, type).reverse().forEach((m) => this._unwrapElement(m));
+
+    if (type === 'code') {
+      // Keep <code> at leaf text level so bold/italic/highlight wrap OUTSIDE backticks (`*`text`*`) with zero stray markers!
+      this._wrapLeafTextNodesWithCode(contents);
+      const startPin = document.createTextNode('');
+      const endPin = document.createTextNode('');
+      targetRange.insertNode(endPin);
+      targetRange.insertNode(contents);
+      targetRange.insertNode(startPin);
+      const newR = document.createRange();
+      newR.setStartAfter(startPin);
+      newR.setEndBefore(endPin);
+      startPin.remove();
+      endPin.remove();
+      finishToggle(newR);
+      return;
+    }
+
+    const wrapper = this._createInlineTag(type, param);
+    if (!wrapper) return;
+    wrapper.appendChild(contents);
+    targetRange.insertNode(wrapper);
+    finishToggle(wrapper);
   }
 
   _unwrapElement(el) {
@@ -1620,12 +2210,17 @@ export class RichComposer {
       : 0;
 
     const oldBody = this._getBlockBodyEl(blockEl);
-    const replacement = this._makeBlockEl(nextType, { indent, checked: false, bulletType });
+    const preservedLayout = { align: blockEl.dataset?.align || null, dir: blockEl.dataset?.dir || null };
+    const replacement = this._makeBlockEl(nextType, { ...preservedLayout, indent, checked: false, bulletType });
     const newBody = this._getBlockBodyEl(replacement);
     newBody.innerHTML = '';
 
     if (nextType === 'codeblock') {
-      newBody.textContent = this._serializeChildren(oldBody).replace(/\u200B/g, '');
+      // Extract clean plain text so toggling codeblock ON -> OFF never leaves stray markdown markers (` or *) behind!
+      newBody.textContent = (oldBody.textContent || '').replace(/\u200B/g, '').replace(/\u00A0/g, ' ');
+    } else if (currentType === 'codeblock') {
+      const plain = (oldBody.textContent || '').replace(/\u200B/g, '').replace(/\u00A0/g, ' ');
+      newBody.appendChild(plain ? document.createTextNode(plain) : document.createElement('br'));
     } else {
       while (oldBody.firstChild) {
         const ch = oldBody.firstChild;
@@ -1642,8 +2237,109 @@ export class RichComposer {
     this._syncOrderedNumbers();
     this._placeCaretAtEnd(newBody);
     this._pushHistory();
+    this.scrollCaretIntoView();
     this.onChange(this.getValue());
     this.onSelectionChange(this.getActiveFormats());
+  }
+
+  _getTargetBlocksForSelection() {
+    this.restoreSelection();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) {
+      return this.el.firstElementChild ? [this.el.firstElementChild] : [];
+    }
+    const range = sel.getRangeAt(0);
+    const startBlk = this._getBlockElement(range.startContainer);
+    const endBlk = this._getBlockElement(range.endContainer);
+    if (!startBlk) return this.el.firstElementChild ? [this.el.firstElementChild] : [];
+    if (!endBlk || startBlk === endBlk) return [startBlk];
+
+    const allBlocks = Array.from(this.el.querySelectorAll('.rc-block'));
+    const i1 = allBlocks.indexOf(startBlk);
+    const i2 = allBlocks.indexOf(endBlk);
+    if (i1 === -1 || i2 === -1) return [startBlk];
+    const [lo, hi] = i1 <= i2 ? [i1, i2] : [i2, i1];
+    return allBlocks.slice(lo, hi + 1);
+  }
+
+  setBlockAlignment(align) {
+    const blocks = this._getTargetBlocksForSelection();
+    if (blocks.length === 0) return;
+    for (const blk of blocks) {
+      if (blk.dataset?.block === 'embed' || blk.dataset?.block === 'codeblock') continue;
+      const nextAlign = blk.dataset?.align === align ? null : align;
+      this._applyBlockLayoutAttrs(blk, nextAlign, blk.dataset?.dir || null);
+    }
+    this._pushHistory();
+    this.scrollCaretIntoView();
+    this.onChange(this.getValue());
+    this.onSelectionChange(this.getActiveFormats());
+  }
+
+  setBlockDirection(dir) {
+    const blocks = this._getTargetBlocksForSelection();
+    if (blocks.length === 0) return;
+    for (const blk of blocks) {
+      if (blk.dataset?.block === 'embed' || blk.dataset?.block === 'codeblock') continue;
+      const nextDir = (dir === 'auto' || blk.dataset?.dir === dir) ? null : dir;
+      this._applyBlockLayoutAttrs(blk, blk.dataset?.align || null, nextDir);
+    }
+    this._pushHistory();
+    this.scrollCaretIntoView();
+    this.onChange(this.getValue());
+    this.onSelectionChange(this.getActiveFormats());
+  }
+
+  insertEmbed({ kind = 'file', mediaId = '', layout = 'full', label = '', previewUrl = '' } = {}) {
+    if (!mediaId || !this.el) return null;
+    this.restoreSelection();
+    const sel = window.getSelection();
+    const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    const anchorBlock = range ? this._getBlockElement(range.startContainer) : null;
+
+    const embedEl = this._makeBlockEl('embed', { kind, mediaId, layout, label, previewUrl });
+    if (anchorBlock && this.el.contains(anchorBlock)) {
+      const isEmptyP = anchorBlock.dataset?.block === 'p' &&
+        !this._serializeChildren(anchorBlock).replace(/\u200B/g, '').trim();
+      if (isEmptyP) {
+        anchorBlock.replaceWith(embedEl);
+      } else {
+        anchorBlock.after(embedEl);
+      }
+    } else {
+      this.el.appendChild(embedEl);
+    }
+
+    // Ensure there is always a tappable paragraph right after the embed so user can keep typing below
+    let nextP = embedEl.nextElementSibling;
+    if (!nextP || nextP.dataset?.block === 'embed') {
+      nextP = this._makeBlockEl('p');
+      embedEl.after(nextP);
+    }
+    this._ensureAtLeastOneBlock();
+    const targetBody = this._getBlockBodyEl(nextP);
+    this._placeCaretAtStart(targetBody?.firstChild || targetBody || nextP);
+    this._pushHistory();
+    this.scrollCaretIntoView();
+    this.onChange(this.getValue());
+    this.onSelectionChange(this.getActiveFormats());
+    return embedEl;
+  }
+
+  updateEmbedPreview(mediaId, previewUrl, label = null) {
+    if (!mediaId || !this.el) return;
+    if (previewUrl) this._embedPreviewUrls.set(String(mediaId), previewUrl);
+    this.el.querySelectorAll(`.rc-block[data-block="embed"][data-embed-media-id="${CSS.escape ? CSS.escape(String(mediaId)) : String(mediaId)}"]`).forEach((emb) => {
+      if (label !== null) {
+        emb.dataset.embedLabel = label;
+        const lbl = emb.querySelector('.rc-embed-label');
+        if (lbl) lbl.textContent = label;
+      }
+      if (previewUrl) {
+        const img = emb.querySelector('.rc-embed-thumb');
+        if (img) img.src = previewUrl;
+      }
+    });
   }
 
   indent(delta = 1) {
@@ -1837,18 +2533,25 @@ export class RichComposer {
       spoiler: false,
       sup: false,
       sub: false,
-      block: 'p'
+      block: 'p',
+      align: null,
+      dir: null
     };
 
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return active;
-    let node = sel.getRangeAt(0).startContainer;
+    const range = sel.getRangeAt(0);
+    let node = range.startContainer;
     if (!this.el.contains(node)) return active;
 
+    let currentBlock = null;
     while (node && node !== this.el) {
       if (node.nodeType === 1) {
         if (node.classList?.contains('rc-block')) {
+          currentBlock = node;
           active.block = node.dataset?.block || 'p';
+          active.align = node.dataset?.align || null;
+          active.dir = node.dataset?.dir || null;
           break;
         }
         if (this._matchesInlineType(node, 'bold')) active.bold = true;
@@ -1865,6 +2568,27 @@ export class RichComposer {
         }
       }
       node = node.parentNode;
+    }
+
+    // Also inspect inner wrapped elements when selection spans across them
+    if (!range.collapsed) {
+      try {
+        const frag = range.cloneContents();
+        for (const fmt of ['bold', 'italic', 'underline', 'strike', 'code', 'spoiler', 'sup', 'sub', 'highlight']) {
+          if (!active[fmt] && this._findMatchingInlineTagsIn(frag, fmt).length > 0 && !this._hasUnformattedText(frag, fmt, false)) {
+            active[fmt] = true;
+          }
+        }
+      } catch (_) {}
+    } else if (currentBlock) {
+      const body = this._getBlockBodyEl(currentBlock);
+      if (body && (body.textContent || '').replace(/\u200B/g, '').trim().length > 0) {
+        for (const fmt of ['bold', 'italic', 'underline', 'strike', 'code', 'spoiler', 'sup', 'sub', 'highlight']) {
+          if (!active[fmt] && this._findMatchingInlineTagsIn(body, fmt).length > 0 && !this._hasUnformattedText(body, fmt, false)) {
+            active[fmt] = true;
+          }
+        }
+      }
     }
 
     return active;

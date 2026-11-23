@@ -242,17 +242,73 @@ export function getDarkerTint(hex, factor = 0.2) {
 }
 
 /**
- * Applies an accent color to the document root CSS variables
+ * Computes a complete, contrast-safe Dark/Light accent token palette from any chosen base hex color.
  */
-export function applyAppAccent(hexColor) {
-  if (!hexColor) return;
-  document.documentElement.style.setProperty('--app-accent', hexColor);
-  document.documentElement.style.setProperty('--accent-color', hexColor);
+export function deriveAppAccentTokens(hexColor, isLight = isLightThemeActive()) {
+  const norm = normalizeHex(hexColor) || (isLight ? '#1dab61' : '#25d366');
+  const { r, g, b } = hexToRgb(norm);
+  const { h, s, l } = rgbToHsl(r, g, b);
+
+  let accentHex = norm;
+  if (norm === '#25d366' || norm === '#1dab61' || norm === '#00a884') {
+    accentHex = isLight ? '#1dab61' : '#25d366';
+  } else if (s < 0.08) {
+    accentHex = hslToHex(h, s, isLight ? Math.min(0.42, Math.max(0.28, l)) : Math.min(0.76, Math.max(0.58, l)));
+  } else if (isLight) {
+    const targetS = Math.min(0.88, Math.max(0.52, s));
+    const targetL = Math.min(0.42, Math.max(0.30, l > 0.5 ? 0.37 : l));
+    accentHex = hslToHex(h, targetS, targetL);
+  } else {
+    const targetS = Math.min(0.92, Math.max(0.54, s));
+    const targetL = Math.min(0.64, Math.max(0.50, l < 0.45 ? 0.56 : l));
+    accentHex = hslToHex(h, targetS, targetL);
+  }
+
+  const rgb = hexToRgb(accentHex);
+  const accentRgb = `${rgb.r}, ${rgb.g}, ${rgb.b}`;
+  const fg = isColorDark(accentHex) ? '#ffffff' : '#0b141a';
+  const soft = isLight
+    ? hslToHex(h, Math.min(0.65, Math.max(0.25, s * 0.72)), 0.91)
+    : hslToHex(h, Math.min(0.65, Math.max(0.28, s * 0.75)), 0.16);
+  const hover = isLight ? getDarkerTint(accentHex, 0.12) : getLighterTint(accentHex, 0.12);
+  const border = `rgba(${accentRgb}, ${isLight ? 0.42 : 0.48})`;
+  const appTitleColor = isLight ? accentHex : '#e9edef';
+
+  return {
+    baseHex: norm,
+    accent: accentHex,
+    accentRgb,
+    fg,
+    soft,
+    hover,
+    border,
+    appTitleColor
+  };
+}
+
+/**
+ * Applies an accent color to the document root CSS variables with full Dark & Light mode adaptation
+ */
+export function applyAppAccent(hexColor, isLight = isLightThemeActive()) {
+  if (!hexColor) return null;
+  const tokens = deriveAppAccentTokens(hexColor, isLight);
+  const rootStyle = document.documentElement.style;
+  rootStyle.setProperty('--app-accent', tokens.accent);
+  rootStyle.setProperty('--accent-color', tokens.accent);
+  rootStyle.setProperty('--wa-green', tokens.accent);
+  rootStyle.setProperty('--app-accent-rgb', tokens.accentRgb);
+  rootStyle.setProperty('--app-accent-fg', tokens.fg);
+  rootStyle.setProperty('--app-accent-soft', tokens.soft);
+  rootStyle.setProperty('--wa-green-active-chip', tokens.soft);
+  rootStyle.setProperty('--app-accent-hover', tokens.hover);
+  rootStyle.setProperty('--app-accent-border', tokens.border);
+  rootStyle.setProperty('--wa-app-title-color', tokens.appTitleColor);
   try {
-    localStorage.setItem('wa_app_accent', hexColor);
+    localStorage.setItem('wa_app_accent', tokens.baseHex);
   } catch (e) {
     // ignore
   }
+  return tokens;
 }
 
 /**

@@ -12,15 +12,16 @@ class Lightbox {
     this._albumKeyDownHandler = null;
   }
 
-  show(mediaItem, msg, onShowInChat) {
+  show(mediaItem, msg, onShowInChat, options = {}) {
     this.onShowInChat = onShowInChat;
-    this.close(); // Close any existing
+    this.close(false); // Close any existing
 
     this.overlay = document.createElement('div');
     this.overlay.className = 'wa-lightbox-overlay';
 
     let mediaContent = '';
     const isVideo = msg.mediaType === 'video';
+    const isWhiteboard = Boolean(msg?.isWhiteboard || msg?.whiteboardData || mediaItem?.isWhiteboard || mediaItem?.whiteboardData);
 
     if (mediaItem && mediaItem.blob) {
       this.currentUrl = URL.createObjectURL(mediaItem.blob);
@@ -39,10 +40,16 @@ class Lightbox {
       <div class="lightbox-header">
         <button class="lightbox-back-btn" aria-label="Close">${Icons.arrowBack('', 24)}</button>
         <div class="lightbox-title-box">
-          <div class="lightbox-sender">${msg.sender || 'Media'}</div>
+          <div class="lightbox-sender">${msg.sender || (isWhiteboard ? 'Whiteboard' : 'Media')}</div>
           <div class="lightbox-time">${timeStr}</div>
         </div>
         <div class="lightbox-actions">
+          ${isWhiteboard ? `
+            <button class="lightbox-edit-wb-btn" title="Edit Whiteboard">
+              ${Icons.edit('', 18)}
+              <span>Edit</span>
+            </button>
+          ` : ''}
           <button class="lightbox-show-in-chat" title="Show in Chat">
             ${Icons.chatPlus('', 20)}
             <span>Show in Chat</span>
@@ -57,13 +64,25 @@ class Lightbox {
 
     document.body.appendChild(this.overlay);
 
-    this.overlay.querySelector('.lightbox-back-btn').addEventListener('click', () => this.close());
+    this.overlay.querySelector('.lightbox-back-btn').addEventListener('click', () => this.close(true));
+
+    const editWbBtn = this.overlay.querySelector('.lightbox-edit-wb-btn');
+    if (editWbBtn) {
+      editWbBtn.addEventListener('click', () => {
+        this.close(true);
+        if (typeof options.onEditWhiteboard === 'function') {
+          options.onEditWhiteboard(msg, mediaItem);
+        } else {
+          window.dispatchEvent(new CustomEvent('wa:edit-whiteboard', { detail: { msg, mediaItem } }));
+        }
+      });
+    }
     
     this.overlay.querySelector('.lightbox-download-btn').addEventListener('click', () => {
       if (this.currentUrl) {
         const a = document.createElement('a');
         a.href = this.currentUrl;
-        a.download = msg.mediaName || (isVideo ? 'video.mp4' : 'photo.jpg');
+        a.download = msg.mediaName || (isVideo ? 'video.mp4' : (isWhiteboard ? 'whiteboard.png' : 'photo.jpg'));
         a.click();
       }
     });
@@ -71,14 +90,13 @@ class Lightbox {
     this.overlay.querySelector('.lightbox-show-in-chat').addEventListener('click', () => {
       const targetChatId = msg.chatId;
       const targetMsgId = msg.id || msg.mediaId || (mediaItem && mediaItem.id);
-      this.close();
+      this.close(true);
       if (this.onShowInChat) {
         this.onShowInChat(targetChatId, targetMsgId);
       }
     });
 
-    window.history.pushState({ modal: 'lightbox' }, '');
-    window.addEventListener('popstate', this.handlePopState);
+    window.router?.pushOverlay('lightbox', () => this.close(false));
   }
 
   // --- Fullscreen Multi-Image Album Lightbox ---
@@ -283,13 +301,14 @@ class Lightbox {
     document.addEventListener('keydown', onKeyDown);
     this._albumKeyDownHandler = onKeyDown;
 
-    // History state push for Android hardware back button
-    window.history.pushState({ modal: 'lightbox' }, '');
-    window.addEventListener('popstate', this.handlePopState);
+    window.router?.pushOverlay('album-lightbox', () => this._closeAlbumOverlay(false));
   }
 
   // Close only the top-level album overlay; if stacked view is underneath, re-show it
-  _closeAlbumOverlay(triggerBack = true) {
+  _closeAlbumOverlay(notifyRouter = true) {
+    if (notifyRouter && window.router) {
+      window.router.removeOverlay('album-lightbox');
+    }
     if (this.overlay && this.overlay !== this.stackedOverlay) {
       const closingEl = this.overlay;
       closingEl.classList.add('overlay-closing');
@@ -303,11 +322,6 @@ class Lightbox {
 
     if (this.stackedOverlay && this.stackedOverlay.isConnected) {
       this.overlay = this.stackedOverlay;
-    }
-
-    if (triggerBack && history.state && history.state.modal === 'lightbox') {
-      this._suppressNextPopState = true;
-      history.back();
     }
   }
 
@@ -394,26 +408,17 @@ class Lightbox {
       this.close(true);
     });
 
-    window.history.pushState({ modal: 'stacked-album' }, '');
-    window.addEventListener('popstate', this.handlePopState);
+    window.router?.pushOverlay('stacked-album', () => this.close(false));
   }
 
-  handlePopState = (e) => {
-    if (this._suppressNextPopState) {
-      this._suppressNextPopState = false;
-      return;
-    }
-    if (this.overlay) {
-      if (this.overlay.classList.contains('album-lightbox-overlay') && this.stackedOverlay && this.stackedOverlay.isConnected) {
-        this._closeAlbumOverlay(false);
-      } else {
-        this.close(false); // already popped by browser
-      }
-    }
-  };
+  handlePopState = () => {};
 
-  close(triggerBack = true) {
-    const hadStacked = !!(this.stackedOverlay && this.stackedOverlay.isConnected);
+  close(notifyRouter = true) {
+    if (notifyRouter && window.router) {
+      window.router.removeOverlay('lightbox');
+      window.router.removeOverlay('album-lightbox');
+      window.router.removeOverlay('stacked-album');
+    }
 
     // Close album overlay
     if (this.overlay) {
@@ -441,14 +446,6 @@ class Lightbox {
     if (this._albumKeyDownHandler) {
       document.removeEventListener('keydown', this._albumKeyDownHandler);
       this._albumKeyDownHandler = null;
-    }
-    window.removeEventListener('popstate', this.handlePopState);
-    if (triggerBack && history.state && (history.state.modal === 'lightbox' || history.state.modal === 'stacked-album')) {
-      if (hadStacked && history.state.modal === 'lightbox') {
-        history.go(-2);
-      } else {
-        history.back();
-      }
     }
   }
 }

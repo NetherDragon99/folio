@@ -20,7 +20,13 @@ import { MessageInfoSheet } from '../components/message-info-sheet.js';
 import { ShareOptionsModal } from '../components/share-options-modal.js';
 import { RichComposer } from '../components/rich-composer.js';
 import { NestedChainSheet } from '../components/nested-chain-sheet.js';
+import { whiteboardModal } from '../components/whiteboard-modal.js';
 import { computeChatSlotReassignments } from '../utils/nested-tree-dnd.js';
+import {
+  expandSelectionWithNestedSubtrees,
+  buildReorderedMessagesList,
+  computeContiguousNestInsert
+} from '../utils/chat-reorder-dnd.js';
 import {
   findNearestDateMessage,
   formatDateDisplay,
@@ -158,8 +164,7 @@ export class ChatView {
           </div>
           
           <div class="chat-header-actions">
-            <button type="button" class="app-bar-icon-btn" id="btn-chat-video-call" aria-label="Video Call">${Icons.callVideo('', 22)}</button>
-            <button type="button" class="app-bar-icon-btn" id="btn-chat-voice-call" aria-label="Voice Call">${Icons.callVoice('', 22)}</button>
+            <button type="button" class="app-bar-icon-btn" id="btn-chat-voice-call" aria-label="Call history" title="Chat call history">${Icons.callVoice('', 22)}</button>
             <button type="button" class="app-bar-icon-btn" id="btn-chat-menu-more" aria-label="More options">${Icons.moreVert('', 22)}</button>
           </div>
         </header>
@@ -186,6 +191,10 @@ export class ChatView {
 
         <!-- 3-Dot Dropdown Menu (Cloned from @refrance14) -->
         <div class="wa-dropdown-menu chat-dropdown-menu" id="chat-dropdown-menu" style="display: none;">
+          <div class="dropdown-item" id="menu-select-messages">
+            <span class="dropdown-item-icon">${Icons.selectMessages('', 20)}</span>
+            <span>Select messages</span>
+          </div>
           <div class="dropdown-item" id="menu-search-in-chat">
             <span class="dropdown-item-icon">${Icons.search('', 20)}</span>
             <span>Search in chat</span>
@@ -242,6 +251,9 @@ export class ChatView {
           <button type="button" class="pinned-bar-close" id="pinned-bar-close" aria-label="Dismiss pinned bar">${Icons.close('', 18)}</button>
         </div>
 
+        <!-- Note Mode Floating Scroll Date Pill (shows ONLY while scrolling, auto-hides after 3s) -->
+        <div class="chat-floating-date-pill" id="chat-floating-date-pill" aria-hidden="true"></div>
+
         <!-- Messages Area -->
         <div class="chat-messages-container" id="chat-messages-wrap"></div>
 
@@ -296,33 +308,33 @@ export class ChatView {
                 <div class="chat-format-toolbar-wrap" id="chat-format-toolbar-wrap">
                   <div class="composer-popover" id="composer-format-popover" style="display: none;"></div>
                   <div class="chat-format-toolbar" id="chat-format-toolbar" role="toolbar" aria-label="Formatting tools">
+                    <button type="button" class="format-tool-btn" data-fmt="embed" title="Insert Inline Media (Image / Voice / File / Whiteboard)">${Icons.plusBlock('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="align" title="Alignment & Direction (LTR / RTL)">${Icons.alignLeft('', 21)}</button>
                     <button type="button" class="format-tool-btn" data-fmt="bold" title="Bold (*text*)"><strong>B</strong></button>
                     <button type="button" class="format-tool-btn" data-fmt="italic" title="Italic (_text_)"><em>I</em></button>
                     <button type="button" class="format-tool-btn" data-fmt="underline" title="Underline (++text++)"><u>U</u></button>
                     <button type="button" class="format-tool-btn" data-fmt="strike" title="Strikethrough (~text~)"><del>S</del></button>
-                    <button type="button" class="format-tool-btn" data-fmt="highlight" title="Highlight Color (==text==)">${Icons.highlight('', 17)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="highlight" title="Highlight Color (==text==)">${Icons.highlight('', 21)}</button>
                     <button type="button" class="format-tool-btn" data-fmt="header" title="Headers (# / ## / ###)"><span class="fmt-txt-icon">H</span></button>
-                    <button type="button" class="format-tool-btn" data-fmt="spoiler" title="Spoiler (||text||)">${Icons.spoilerEye('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="check" title="Interactive Checklist ([ ] )">${Icons.checklist('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="fold" title="Fold / Collapsible Block ([fold:Title]...[/fold])">${Icons.collapseAll('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="ul" title="Bulleted & Arrow List (- , -> , ↳ )">${Icons.listBulleted('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="ol" title="Numbered List (1. )">${Icons.listNumbered('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="indent-inc" title="Increase Indent (Tab)">${Icons.indentIncrease('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="indent-dec" title="Decrease Indent (Shift+Tab)">${Icons.indentDecrease('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="link" title="Link on Word ([word](url))">${Icons.linkIcon('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="quote" title="Quote (> )">${Icons.quote('', 17)}</button>
-                    <button type="button" class="format-tool-btn" data-fmt="code" title="Inline Code (\`code\`)">${Icons.codeBlock('', 16)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="spoiler" title="Spoiler (||text||)">${Icons.spoilerEye('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="check" title="Interactive Checklist ([ ] )">${Icons.checklist('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="fold" title="Fold / Collapsible Block ([fold:Title]...[/fold])">${Icons.collapseAll('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="ul" title="Bulleted & Arrow List (- , -> , ↳ )">${Icons.listBulleted('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="ol" title="Numbered List (1. )">${Icons.listNumbered('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="indent-inc" title="Increase Indent (Tab)">${Icons.indentIncrease('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="indent-dec" title="Decrease Indent (Shift+Tab)">${Icons.indentDecrease('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="link" title="Link on Word ([word](url))">${Icons.linkIcon('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="quote" title="Quote (> )">${Icons.quote('', 21)}</button>
+                    <button type="button" class="format-tool-btn" data-fmt="code" title="Inline Code (\`code\`)">${Icons.codeBlock('', 21)}</button>
                     <button type="button" class="format-tool-btn" data-fmt="codeblock" title="Code Block (\`\`\` )"><span class="fmt-txt-icon">{ }</span></button>
                     <button type="button" class="format-tool-btn" data-fmt="sup" title="Superscript (^^x^^)"><span class="fmt-txt-icon">x²</span></button>
                     <button type="button" class="format-tool-btn" data-fmt="sub" title="Subscript (,,x,,)"><span class="fmt-txt-icon">x₂</span></button>
                   </div>
                 </div>
-                <label class="input-icon-btn composer-edge-btn" id="btn-gallery-attach" title="Attach file or photo">
+                <button type="button" class="input-icon-btn composer-edge-btn" id="btn-gallery-attach" title="Attachments" aria-label="Attachments">
                   ${Icons.paperclip('', 22)}
-                  <input type="file" id="chat-gallery-input" accept="image/*,video/*" multiple style="display:none;" />
-                </label>
+                </button>
                 <button type="button" class="input-icon-btn composer-edge-btn" id="btn-camera-snap" aria-label="Camera">${Icons.camera('', 22)}</button>
-                <input type="file" id="chat-camera-input" accept="image/*" capture="environment" style="display:none;" />
               </div>
             </div>
           </div>
@@ -330,6 +342,35 @@ export class ChatView {
             <span class="mic-send-icon-slot">${Icons.mic('mic-icon', 22)}</span>
           </button>
         </footer>
+
+        <!-- WhatsApp-Style 4-Icon Attachment Drawer (Keyboard-Synced: Camera, Gallery, Files, Whiteboard) -->
+        <div class="chat-attach-drawer" id="chat-attach-drawer" aria-hidden="true">
+          <div class="attach-drawer-grid">
+            <button type="button" class="attach-tile-btn" id="attach-opt-camera">
+              <span class="attach-tile-circle is-camera">${Icons.camera('', 24)}</span>
+              <span class="attach-tile-label">Camera</span>
+            </button>
+            <button type="button" class="attach-tile-btn" id="attach-opt-gallery">
+              <span class="attach-tile-circle is-gallery">${Icons.gallery('', 24)}</span>
+              <span class="attach-tile-label">Gallery</span>
+            </button>
+            <button type="button" class="attach-tile-btn" id="attach-opt-files">
+              <span class="attach-tile-circle is-files">${Icons.documentIcon('', 24)}</span>
+              <span class="attach-tile-label">Files</span>
+            </button>
+            <button type="button" class="attach-tile-btn" id="attach-opt-whiteboard">
+              <span class="attach-tile-circle is-whiteboard">${Icons.whiteboard('', 24)}</span>
+              <span class="attach-tile-label">Whiteboard</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Hidden File Inputs (Outside buttons to avoid event bubbling) -->
+        <input type="file" id="chat-gallery-input" accept="image/*,video/*" multiple style="display:none;" />
+        <input type="file" id="chat-any-file-input" accept="*/*" multiple style="display:none;" />
+        <input type="file" id="chat-camera-input" accept="image/*" capture="environment" style="display:none;" />
+        <input type="file" id="chat-inline-img-input" accept="image/*" style="display:none;" />
+        <input type="file" id="chat-inline-file-input" accept="*/*" style="display:none;" />
 
         <!-- Holding Voice Recording Bar (@refrance 1 & 2) -->
         <div class="chat-voice-holding-bar" id="chat-voice-holding-bar" style="display: none;">
@@ -413,11 +454,8 @@ export class ChatView {
       if (effectiveBubbleColor) {
         applyOutgoingBubbleColor(effectiveBubbleColor, chatScreenEl, false);
       } else {
+        // Leave --wa-chat-fab-bg / --wa-chat-fab-fg unset so chat controls inherit the chosen global App Theme Accent
         clearOutgoingBubbleColor(chatScreenEl);
-        const isLight = isLightThemeActive();
-        const defaultAction = deriveChatActionColor(outgoingTheme === 'green' ? '#005c4b' : '#25d366', isLight);
-        chatScreenEl.style.setProperty('--wa-chat-fab-bg', defaultAction.bg);
-        chatScreenEl.style.setProperty('--wa-chat-fab-fg', defaultAction.fg);
       }
     }
 
@@ -523,6 +561,12 @@ export class ChatView {
       },
       onNestedTreeOpen: (msg) => {
         this.openNestedTreeSheet(msg);
+      },
+      onFloatingDateUpdate: (dateLabel) => {
+        this._showFloatingNoteDatePill(dateLabel);
+      },
+      onSelectionReorderHold: (msg, rowEl, evt) => {
+        this._startSelectedMessagesDragReorder(msg, rowEl, evt);
       }
     });
 
@@ -612,20 +656,20 @@ export class ChatView {
       this.router.navigate(`#/chat/${this.chatId}/info`);
     });
 
-    // Video & Voice Call Actions (Task 6)
-    const vidCallBtn = this.container.querySelector('#btn-chat-video-call');
-    if (vidCallBtn) {
-      vidCallBtn.addEventListener('click', () => {
-        Toast.show(`Video calling ${this.chat.name}...`);
-      });
-    }
-
+    // Per-Chat Call History Action (Video Call removed)
     const voiceCallBtn = this.container.querySelector('#btn-chat-voice-call');
     if (voiceCallBtn) {
       voiceCallBtn.addEventListener('click', () => {
-        Toast.show(`Calling ${this.chat.name}...`);
+        this.router.navigate(`#/chat/${encodeURIComponent(this.chatId)}/calls`);
       });
     }
+
+    // Global Whiteboard Edit event (triggered from Lightbox, bubble badge, or inline embed)
+    if (this._onEditWhiteboardBound) {
+      window.removeEventListener('wa:edit-whiteboard', this._onEditWhiteboardBound);
+    }
+    this._onEditWhiteboardBound = (e) => this._handleEditWhiteboardEvent(e.detail);
+    window.addEventListener('wa:edit-whiteboard', this._onEditWhiteboardBound);
 
     // 3-Dot Dropdown Menu Listeners (@refrance14)
     const moreMenuBtn = this.container.querySelector('#btn-chat-menu-more');
@@ -640,6 +684,11 @@ export class ChatView {
         if (!e.target.closest('#chat-dropdown-menu') && !e.target.closest('#btn-chat-menu-more')) {
           if (dropdownMenu) Motion.closeMenu(dropdownMenu);
         }
+      });
+
+      this.container.querySelector('#menu-select-messages')?.addEventListener('click', () => {
+        Motion.closeMenu(dropdownMenu);
+        this.enterSelectionMode(null, null);
       });
 
       this.container.querySelector('#menu-search-in-chat')?.addEventListener('click', () => {
@@ -736,18 +785,76 @@ export class ChatView {
       });
     }
 
-    // Camera input & Gallery input
+    // 4-Icon Attachment Drawer (Camera, Gallery, Files, Whiteboard) — Keyboard-synced!
+    const attachBtn = this.container.querySelector('#btn-gallery-attach');
+    const attachDrawer = this.container.querySelector('#chat-attach-drawer');
     const cameraInput = this.container.querySelector('#chat-camera-input');
     const galleryInput = this.container.querySelector('#chat-gallery-input');
+    const anyFileInput = this.container.querySelector('#chat-any-file-input');
+    const inlineImgInput = this.container.querySelector('#chat-inline-img-input');
+    const inlineFileInput = this.container.querySelector('#chat-inline-file-input');
     const cameraBtn = this.container.querySelector('#btn-camera-snap');
+
+    const closeAttachDrawer = (notifyRouter = true) => {
+      if (!attachDrawer || !attachDrawer.classList.contains('is-open')) return;
+      attachDrawer.classList.remove('is-open');
+      attachDrawer.setAttribute('aria-hidden', 'true');
+      attachBtn?.classList.remove('is-drawer-open');
+      if (notifyRouter) window.router?.removeOverlay?.('chat-attach-drawer');
+    };
+
+    const openAttachDrawer = () => {
+      if (!attachDrawer) return;
+      // Dismiss mobile keyboard cleanly so drawer replaces keyboard seamlessly
+      const activeEd = this.container.querySelector('#chat-input-editor');
+      if (activeEd && document.activeElement === activeEd) {
+        activeEd.blur();
+      }
+      attachDrawer.classList.add('is-open');
+      attachDrawer.setAttribute('aria-hidden', 'false');
+      attachBtn?.classList.add('is-drawer-open');
+      window.router?.pushOverlay?.('chat-attach-drawer', () => closeAttachDrawer(false));
+    };
+
+    this._closeAttachDrawer = closeAttachDrawer;
+
+    if (attachBtn && attachDrawer) {
+      attachBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (attachDrawer.classList.contains('is-open')) {
+          closeAttachDrawer(true);
+        } else {
+          openAttachDrawer();
+        }
+      });
+
+      this.container.querySelector('#attach-opt-camera')?.addEventListener('click', () => {
+        closeAttachDrawer(true);
+        cameraInput?.click();
+      });
+      this.container.querySelector('#attach-opt-gallery')?.addEventListener('click', () => {
+        closeAttachDrawer(true);
+        galleryInput?.click();
+      });
+      this.container.querySelector('#attach-opt-files')?.addEventListener('click', () => {
+        closeAttachDrawer(true);
+        anyFileInput?.click();
+      });
+      this.container.querySelector('#attach-opt-whiteboard')?.addEventListener('click', () => {
+        closeAttachDrawer(true);
+        this._openNewWhiteboard(false);
+      });
+    }
 
     if (cameraBtn && cameraInput) {
       cameraBtn.addEventListener('click', () => {
+        closeAttachDrawer(true);
         cameraInput.click();
       });
       cameraInput.addEventListener('change', (e) => {
         if (e.target.files && e.target.files.length > 0) {
-          this.openMediaEditor(Array.from(e.target.files));
+          this.openMediaEditor(Array.from(e.target.files), 'image/*');
           cameraInput.value = '';
         }
       });
@@ -756,9 +863,64 @@ export class ChatView {
     if (galleryInput) {
       galleryInput.addEventListener('change', (e) => {
         if (e.target.files && e.target.files.length > 0) {
-          this.openMediaEditor(Array.from(e.target.files));
+          this.openMediaEditor(Array.from(e.target.files), 'image/*,video/*');
           galleryInput.value = '';
         }
+      });
+    }
+
+    if (anyFileInput) {
+      anyFileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          this.openMediaEditor(Array.from(e.target.files), '*/*');
+          anyFileInput.value = '';
+        }
+      });
+    }
+
+    // Inline Composer Embeds (Image / File saved to IndexedDB and inserted right at caret)
+    if (inlineImgInput) {
+      inlineImgInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        inlineImgInput.value = '';
+        if (!file || !this.richComposer) return;
+        const mediaId = db.generateUUID();
+        await db.saveMedia({
+          id: mediaId,
+          chatId: this.chatId,
+          filename: file.name || 'photo.jpg',
+          type: 'image',
+          mimeType: file.type || 'image/jpeg',
+          size: file.size || 0,
+          blob: file,
+          timestamp: Date.now()
+        });
+        const previewUrl = URL.createObjectURL(file);
+        this.richComposer.insertEmbed({ kind: 'image', mediaId, layout: 'full', label: file.name || 'Photo', previewUrl });
+      });
+    }
+
+    if (inlineFileInput) {
+      inlineFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        inlineFileInput.value = '';
+        if (!file || !this.richComposer) return;
+        const mediaId = db.generateUUID();
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+        const isImg = (file.type || '').startsWith('image/');
+        const kind = isImg ? 'image' : 'file';
+        await db.saveMedia({
+          id: mediaId,
+          chatId: this.chatId,
+          filename: file.name || 'file',
+          type: isImg ? 'image' : (isPdf ? 'pdf' : 'document'),
+          mimeType: file.type || 'application/octet-stream',
+          size: file.size || 0,
+          blob: file,
+          timestamp: Date.now()
+        });
+        const previewUrl = isImg ? URL.createObjectURL(file) : '';
+        this.richComposer.insertEmbed({ kind, mediaId, layout: 'full', label: file.name || 'Document', previewUrl });
       });
     }
 
@@ -876,6 +1038,7 @@ export class ChatView {
         const fmt = btn.dataset.fmt;
         let on = false;
         if (fmt === 'header') on = ['h1', 'h2', 'h3'].includes(activeFormats.block);
+        else if (fmt === 'align') on = Boolean(activeFormats.align || activeFormats.dir);
         else if (fmt in activeFormats) on = Boolean(activeFormats[fmt]);
         else if (['ul', 'ol', 'check', 'quote', 'codeblock'].includes(fmt)) on = activeFormats.block === fmt;
         btn.classList.toggle('is-active', on);
@@ -924,8 +1087,12 @@ export class ChatView {
       }
 
       // Smooth CSS state class drives icon morph transitions (no abrupt display:none flicker!)
+      const isActivelyTyping = hasRawText || Boolean(this.editingMessage);
       if (inputBar) {
-        inputBar.classList.toggle('has-typed-text', hasRawText || Boolean(this.editingMessage));
+        inputBar.classList.toggle('has-typed-text', isActivelyTyping);
+      }
+      if (inputPill) {
+        inputPill.classList.toggle('is-typing', isActivelyTyping);
       }
       if (dragHandle) {
         dragHandle.style.display = (hasRawText || Boolean(this.editingMessage) || isFullscreen || isDraggingInput) ? 'flex' : 'none';
@@ -1139,6 +1306,14 @@ export class ChatView {
       }, 1600);
     };
 
+    // Tools that open a popover already display their own descriptive header -> suppress tooltip so it never covers the menu!
+    const POPOVER_FORMAT_TOOLS = new Set(['highlight', 'header', 'ul', 'align', 'embed']);
+    const hideActionTooltip = () => {
+      clearTimeout(actionTooltipTimer);
+      const t = this.container.querySelector('#composer-action-tooltip');
+      if (t) t.style.display = 'none';
+    };
+
     if (formatToolbar) {
       formatToolbar.querySelectorAll('.format-tool-btn[data-fmt]').forEach((btn) => {
         btn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -1147,7 +1322,85 @@ export class ChatView {
           e.stopPropagation();
           if (!this.richComposer) return;
           const fmt = btn.dataset.fmt;
-          showActionTooltip(btn, TOOL_ACTION_NAMES[fmt] || fmt);
+          if (POPOVER_FORMAT_TOOLS.has(fmt)) {
+            hideActionTooltip();
+          } else {
+            showActionTooltip(btn, TOOL_ACTION_NAMES[fmt] || fmt);
+          }
+
+          if (fmt === 'embed') {
+            if (this._activePopover === 'embed') {
+              closeFormatPopover();
+              return;
+            }
+            this._activePopover = 'embed';
+            formatPopover.innerHTML = `
+              <div class="composer-popover-title">Insert Inside Text (إدراج داخل النص)</div>
+              <div class="composer-embed-picker">
+                <button type="button" class="composer-embed-opt" data-emb="image">${Icons.gallery('', 18)}<span>Image</span></button>
+                <button type="button" class="composer-embed-opt" data-emb="audio">${Icons.mic('', 18)}<span>Voice</span></button>
+                <button type="button" class="composer-embed-opt" data-emb="file">${Icons.documentIcon('', 18)}<span>File</span></button>
+                <button type="button" class="composer-embed-opt" data-emb="whiteboard">${Icons.whiteboard('', 18)}<span>Board</span></button>
+              </div>
+            `;
+            formatPopover.style.display = 'block';
+            formatPopover.querySelectorAll('.composer-embed-opt').forEach((eb) => {
+              eb.addEventListener('mousedown', (ev) => ev.preventDefault());
+              eb.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const kind = eb.dataset.emb;
+                closeFormatPopover();
+                if (kind === 'image') inlineImgInput?.click();
+                else if (kind === 'file') inlineFileInput?.click();
+                else if (kind === 'whiteboard') this._openNewWhiteboard(true);
+                else if (kind === 'audio') this._openInlineVoiceRecorderModal();
+              });
+            });
+            return;
+          }
+
+          if (fmt === 'align') {
+            if (this._activePopover === 'align') {
+              closeFormatPopover();
+              return;
+            }
+            this._activePopover = 'align';
+            const curFmt = this.richComposer.getActiveFormats();
+            formatPopover.innerHTML = `
+              <div class="composer-popover-title">Alignment & Direction (المحاذاة والاتجاه)</div>
+              <div class="composer-align-grid">
+                <button type="button" class="composer-align-btn ${curFmt.align === 'left' ? 'is-active' : ''}" data-al="left" title="Align Left">${Icons.alignLeft('', 18)}<span>Left</span></button>
+                <button type="button" class="composer-align-btn ${curFmt.align === 'center' ? 'is-active' : ''}" data-al="center" title="Align Center">${Icons.alignCenter('', 18)}<span>Center</span></button>
+                <button type="button" class="composer-align-btn ${curFmt.align === 'right' ? 'is-active' : ''}" data-al="right" title="Align Right">${Icons.alignRight('', 18)}<span>Right</span></button>
+              </div>
+              <div class="composer-dir-grid">
+                <button type="button" class="composer-align-btn ${!curFmt.dir ? 'is-active' : ''}" data-dir="auto">Auto</button>
+                <button type="button" class="composer-align-btn ${curFmt.dir === 'ltr' ? 'is-active' : ''}" data-dir="ltr">${Icons.textDirLtr('', 16)}<span>LTR</span></button>
+                <button type="button" class="composer-align-btn ${curFmt.dir === 'rtl' ? 'is-active' : ''}" data-dir="rtl">${Icons.textDirRtl('', 16)}<span>RTL</span></button>
+              </div>
+            `;
+            formatPopover.style.display = 'block';
+            formatPopover.querySelectorAll('[data-al]').forEach((ab) => {
+              ab.addEventListener('mousedown', (ev) => ev.preventDefault());
+              ab.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                this.richComposer.setBlockAlignment(ab.dataset.al);
+                closeFormatPopover();
+              });
+            });
+            formatPopover.querySelectorAll('[data-dir]').forEach((dbBtn) => {
+              dbBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+              dbBtn.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                this.richComposer.setBlockDirection(dbBtn.dataset.dir);
+                closeFormatPopover();
+              });
+            });
+            return;
+          }
 
           if (fmt === 'highlight') {
             if (this._activePopover === 'highlight') {
@@ -1269,47 +1522,7 @@ export class ChatView {
       });
     }
 
-    // Mount live WYSIWYG RichComposer on #chat-input-editor
-    this.richComposer = new RichComposer(editorEl, {
-      onChange: (markup) => {
-        updateInputLayout();
-        this._handleComposerLinkDetection(markup);
-      },
-      onSelectionChange: (activeFormats) => {
-        updateToolbarActiveStates(activeFormats);
-      }
-    });
-
-    this._updateInputLayout = updateInputLayout;
-    this._resetInputComposerHeight = () => {
-      manualPillHeightPx = null;
-      setFullscreenState(false, true);
-      updateInputLayout();
-    };
-    this._closeFormatPopover = closeFormatPopover;
-
-    this._onInputResize = () => {
-      updateInputLayout();
-      if (this._wasNearBottom && messagesWrap) {
-        requestAnimationFrame(() => {
-          messagesWrap.scrollTop = messagesWrap.scrollHeight;
-        });
-      }
-    };
-    window.addEventListener('resize', this._onInputResize);
-    window.visualViewport?.addEventListener('resize', this._onInputResize);
-
-    editorEl.addEventListener('focus', () => {
-      if (this._wasNearBottom && messagesWrap) {
-        setTimeout(() => {
-          if (this._wasNearBottom && messagesWrap) {
-            messagesWrap.scrollTop = messagesWrap.scrollHeight;
-          }
-        }, 120);
-      }
-    });
-
-    sendBtn.addEventListener('click', async () => {
+    const triggerComposerSubmit = async () => {
       const currentMarkup = getComposerText();
       if (this.editingMessage) {
         await this.submitMessageEdit(currentMarkup);
@@ -1324,7 +1537,76 @@ export class ChatView {
         setFullscreenState(false, true);
         updateInputLayout();
       }
+    };
+
+    // Mount live WYSIWYG RichComposer on #chat-input-editor
+    this.richComposer = new RichComposer(editorEl, {
+      onChange: (markup) => {
+        updateInputLayout();
+        this._handleComposerLinkDetection(markup);
+      },
+      onSelectionChange: (activeFormats) => {
+        updateToolbarActiveStates(activeFormats);
+      },
+      onSubmit: () => {
+        triggerComposerSubmit();
+      },
+      shouldEnterSend: () => {
+        const settingOn = localStorage.getItem('wa_enter_to_send') !== 'false';
+        const isDesktopPointer = window.matchMedia ? window.matchMedia('(pointer: fine)').matches : true;
+        return Boolean(settingOn && isDesktopPointer && !isFullscreen);
+      },
+      onEditInlineWhiteboard: async (mediaId) => {
+        if (!mediaId) return;
+        const mediaItem = await db.getMedia(mediaId);
+        if (!mediaItem) return;
+        whiteboardModal.open({
+          initialScene: mediaItem.whiteboardData || null,
+          isEditing: true,
+          onDone: async ({ blob, whiteboardData }) => {
+            await db.saveMedia({ ...mediaItem, blob, whiteboardData, isWhiteboard: true, size: blob.size, timestamp: Date.now() });
+            const newUrl = URL.createObjectURL(blob);
+            this.richComposer?.updateEmbedPreview(mediaId, newUrl);
+            Toast.show('Whiteboard updated');
+          }
+        });
+      }
     });
+
+    this._updateInputLayout = updateInputLayout;
+    this._resetInputComposerHeight = () => {
+      manualPillHeightPx = null;
+      setFullscreenState(false, true);
+      updateInputLayout();
+    };
+    this._closeFormatPopover = closeFormatPopover;
+
+    this._onInputResize = () => {
+      updateInputLayout();
+      this.scroller?.scheduleTreeConnectorRedraw();
+      if (this._wasNearBottom && messagesWrap) {
+        requestAnimationFrame(() => {
+          messagesWrap.scrollTop = messagesWrap.scrollHeight;
+        });
+      }
+    };
+    window.addEventListener('resize', this._onInputResize);
+    window.visualViewport?.addEventListener('resize', this._onInputResize);
+
+    editorEl.addEventListener('focus', () => {
+      // Close attachment drawer automatically when user returns focus to text editor (restoring keyboard smoothly!)
+      closeAttachDrawer(true);
+      this.richComposer?.scrollCaretIntoView();
+      if (this._wasNearBottom && messagesWrap) {
+        setTimeout(() => {
+          if (this._wasNearBottom && messagesWrap) {
+            messagesWrap.scrollTop = messagesWrap.scrollHeight;
+          }
+        }, 120);
+      }
+    });
+
+    sendBtn.addEventListener('click', triggerComposerSubmit);
 
     // Voice Recorder Setup (Long Press, Swipe up to lock, Pause/Resume, Discard)
     this.setupVoiceRecording();
@@ -1622,14 +1904,26 @@ export class ChatView {
     if (sendBtn) sendBtn.classList.remove('recording-active');
   }
 
-  openMediaEditor(files) {
+  openMediaEditor(files, acceptMode = 'image/*,video/*') {
+    const initialCaption = this.richComposer ? this.richComposer.getValue() : '';
     const editor = new MediaEditorModal({
       recipientName: this.chat.name,
-      onSend: async ({ files, caption, isHd }) => {
-        await this.sendBatchMediaMessages(files, caption, isHd);
+      onSend: async ({ files: chosenFiles, caption, isHd }) => {
+        if (this.richComposer) {
+          this.richComposer.clear();
+          this._resetPendingLinkPreview?.();
+          this._resetInputComposerHeight?.();
+        }
+        await this.sendBatchMediaMessages(chosenFiles, caption, isHd);
+      },
+      onCancel: (latestCaption) => {
+        if (typeof latestCaption === 'string' && this.richComposer) {
+          this.richComposer.setValue(latestCaption);
+          this._updateInputLayout?.();
+        }
       }
     });
-    editor.show(files);
+    editor.show(files, { initialCaption, accept: acceptMode });
   }
 
   // ---------- Reply feature ----------
@@ -1958,10 +2252,39 @@ export class ChatView {
     });
 
     this.scroller.allMessages.push(newMsg);
+
+    // If composed under a nested parent, auto-reorder immediately into its exact contiguous subtree slot!
+    if (nestedParentId) {
+      const nestRes = computeContiguousNestInsert(
+        this.scroller.allMessages,
+        nestedParentId,
+        [newMsg.id],
+        this.scroller.nestedChildrenByParentId
+      );
+      if (nestRes.changed && nestRes.updates.length > 0) {
+        const updateById = new Map(nestRes.updates.map((u) => [String(u.id), u]));
+        const toSave = [];
+        for (const m of nestRes.reordered) {
+          const u = updateById.get(String(m.id));
+          if (u) {
+            m.timestamp = u.timestamp;
+            m.seq = u.seq;
+            m.displayTimestamp = u.displayTimestamp;
+            toSave.push(m);
+          }
+        }
+        await db.saveMessages(toSave);
+        await this.scroller.loadInitial(newMsg.id);
+        if (this.composingListMeta) this.renderListComposeBanner();
+        return;
+      }
+    }
+
     this.scroller.rebuildMessageIndexes();
     this.scroller.visibleEndIndex = this.scroller.allMessages.length;
     const msgEl = await this.scroller.createMessageElement(newMsg);
     this.container.querySelector('#chat-messages-wrap').appendChild(msgEl);
+    this.scroller.scheduleTreeConnectorRedraw();
 
     if (nestedParentId) {
       await this.scroller.refreshMessagesById([nestedParentId]);
@@ -1979,18 +2302,27 @@ export class ChatView {
     const currentMe = this.chat.meParticipant || this.chat.customMeName || 'Me';
     const batchId = `batch_${Date.now()}`;
     const newMsgs = [];
+    const detectType = (file) => {
+      const mime = (file?.type || '').toLowerCase();
+      const name = (file?.name || '').toLowerCase();
+      if (mime.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(name)) return 'video';
+      if (mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(name)) return 'image';
+      if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|opus|m4a)$/i.test(name)) return 'audio';
+      if (mime === 'application/pdf' || /\.pdf$/i.test(name)) return 'pdf';
+      return 'document';
+    };
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const mediaId = db.generateUUID();
-      const isVid = file.type.startsWith('video/');
-      const type = isVid ? 'video' : 'image';
+      const type = detectType(file);
 
       const mediaItem = {
         id: mediaId,
         chatId: this.chatId,
         filename: file.name,
         type: type,
+        mimeType: file.type || '',
         size: file.size,
         blob: file,
         isHd: isHd,
@@ -2016,21 +2348,28 @@ export class ChatView {
     }
 
     const lastFile = files[files.length - 1];
+    const allVisual = newMsgs.every((m) => m.mediaType === 'image' || m.mediaType === 'video');
     await db.updateChat(this.chatId, {
-      lastMessage: files.length > 1 ? `📷 ${files.length} photos` : `📷 ${lastFile.name}`,
+      lastMessage: files.length > 1
+        ? (allVisual ? `📷 ${files.length} photos` : `📎 ${files.length} files`)
+        : `${allVisual ? '📷' : '📎'} ${lastFile.name}`,
       updatedAt: Date.now()
     });
 
     this.scroller.allMessages.push(...newMsgs);
     this.scroller.rebuildMessageIndexes();
 
-    if (newMsgs.length > 1) {
+    const wrap = this.container.querySelector('#chat-messages-wrap');
+    if (newMsgs.length > 1 && allVisual) {
       const albumRow = await this.scroller.createAlbumElement(newMsgs);
-      this.container.querySelector('#chat-messages-wrap').appendChild(albumRow);
+      wrap.appendChild(albumRow);
     } else {
-      const msgEl = await this.scroller.createMessageElement(newMsgs[0]);
-      this.container.querySelector('#chat-messages-wrap').appendChild(msgEl);
+      for (const m of newMsgs) {
+        const msgEl = await this.scroller.createMessageElement(m);
+        wrap.appendChild(msgEl);
+      }
     }
+    this.scroller.scheduleTreeConnectorRedraw();
 
     if (newMsgs[0]?.nestedParent?.id) {
       await this.scroller.refreshMessagesById([newMsgs[0].nestedParent.id]);
@@ -2509,7 +2848,35 @@ export class ChatView {
       if (inChat) inChat.nestedParent = { ...payload };
     }
 
+    // Automatically reorder newly nested messages into their exact contiguous tree position right under parent!
+    if (this.scroller?.allMessages) {
+      const nestRes = computeContiguousNestInsert(
+        this.scroller.allMessages,
+        targetParentMsg.id,
+        sourceIds,
+        this.scroller.nestedChildrenByParentId
+      );
+      if (nestRes.changed && nestRes.updates.length > 0) {
+        const updateById = new Map(nestRes.updates.map((u) => [String(u.id), u]));
+        const toSave = [];
+        for (const m of nestRes.reordered) {
+          const u = updateById.get(String(m.id));
+          if (u) {
+            m.timestamp = u.timestamp;
+            m.seq = u.seq;
+            m.displayTimestamp = u.displayTimestamp;
+            toSave.push(m);
+          }
+        }
+        await db.saveMessages(toSave);
+        await this.scroller.loadInitial(sources[0].id);
+        Toast.show(sources.length > 1 ? `${sources.length} messages nested & placed in tree` : 'Message nested & moved into tree');
+        return;
+      }
+    }
+
     await this.scroller?.refreshMessagesById(Array.from(affectedIds));
+    this.scroller?.scheduleTreeConnectorRedraw();
     Toast.show(sources.length > 1 ? `${sources.length} messages nested` : 'Message nested under parent');
   }
 
@@ -3156,8 +3523,9 @@ export class ChatView {
   }
 
   // --- Message Multi-Selection System ---
-  enterSelectionMode(initialMsgId, rowEl) {
+  enterSelectionMode(initialMsgId = null, rowEl = null) {
     this.isSelectionMode = true;
+    this._allowEmptySelection = !initialMsgId;
     if (this.scroller) this.scroller.selectionMode = true;
     this.selectedMessageIds.clear();
     if (initialMsgId) {
@@ -3178,10 +3546,11 @@ export class ChatView {
       if (row) row.classList.remove('is-msg-selected');
     } else {
       this.selectedMessageIds.add(msgId);
+      this._allowEmptySelection = false;
       if (row) row.classList.add('is-msg-selected');
     }
 
-    if (this.selectedMessageIds.size === 0) {
+    if (this.selectedMessageIds.size === 0 && !this._allowEmptySelection) {
       this.exitSelectionMode();
     } else {
       this.updateMessageSelectionBar();
@@ -3189,7 +3558,7 @@ export class ChatView {
   }
 
   updateMessageSelectionBar() {
-    if (this.selectedMessageIds.size === 0) {
+    if (this.selectedMessageIds.size === 0 && !this._allowEmptySelection) {
       this.exitSelectionMode();
       return;
     }
@@ -3207,6 +3576,12 @@ export class ChatView {
     selectHeader.style.display = 'flex';
     if (countEl) countEl.textContent = `${this.selectedMessageIds.size}`;
     if (overflowMenu) overflowMenu.style.display = 'none';
+
+    if (this.selectedMessageIds.size === 0) {
+      toolsBar.innerHTML = `<span class="selection-empty-hint">Tap messages to select</span>`;
+      if (overflowWrap) overflowWrap.style.display = 'none';
+      return;
+    }
 
     // Retrieve selected message objects
     const allMsgs = this.scroller?.allMessages || [];
@@ -3295,7 +3670,19 @@ export class ChatView {
         }
       });
 
-      // 6. Edit (any non-deleted text or media caption message)
+      // 6. Edit (Whiteboard opens Whiteboard editor; text/media opens caption/text composer)
+      if (msg.isWhiteboard || msg.whiteboardData) {
+        tools.push({
+          id: 'edit-whiteboard',
+          label: 'Edit Board',
+          icon: Icons.whiteboard('', 20),
+          action: async () => {
+            this.exitSelectionMode();
+            const mediaItem = msg.mediaId ? await db.getMedia(msg.mediaId) : null;
+            this._handleEditWhiteboardEvent({ msg, mediaItem });
+          }
+        });
+      }
       if (canEdit) {
         tools.push({
           id: 'edit',
@@ -4011,7 +4398,470 @@ export class ChatView {
     panel.open();
   }
 
+  // --- Note Mode Floating Scroll Date Pill (shows ONLY during scroll, auto-hides after 3s) ---
+  _showFloatingNoteDatePill(dateLabel) {
+    const pill = this.container?.querySelector('#chat-floating-date-pill');
+    if (!pill || !dateLabel) return;
+    pill.textContent = dateLabel;
+    pill.classList.add('is-visible');
+    clearTimeout(this._floatingDateTimer);
+    this._floatingDateTimer = setTimeout(() => {
+      pill.classList.remove('is-visible');
+    }, 3000);
+  }
+
+  // --- Fullscreen Infinite Whiteboard: Create & In-Place Edit (Standalone + Inline Embed) ---
+  _openNewWhiteboard(inlineMode = false) {
+    whiteboardModal.open({
+      initialScene: null,
+      isEditing: false,
+      onDone: async ({ blob, whiteboardData }) => {
+        if (!blob) return;
+        const mediaId = db.generateUUID();
+        const filename = `whiteboard_${Date.now()}.png`;
+        await db.saveMedia({
+          id: mediaId,
+          chatId: this.chatId,
+          filename,
+          type: 'image',
+          mimeType: 'image/png',
+          size: blob.size || 0,
+          blob,
+          isWhiteboard: true,
+          whiteboardData,
+          timestamp: Date.now()
+        });
+
+        if (inlineMode && this.richComposer) {
+          const previewUrl = URL.createObjectURL(blob);
+          this.richComposer.insertEmbed({
+            kind: 'whiteboard',
+            mediaId,
+            layout: 'full',
+            label: 'Whiteboard',
+            previewUrl
+          });
+          Toast.show('Whiteboard inserted inside message');
+          return;
+        }
+
+        // Standalone whiteboard message (also merges any drafted caption!)
+        const caption = (this.richComposer ? this.richComposer.getValue() : '').trim();
+        const currentMe = this.chat.meParticipant || this.chat.customMeName || 'Me';
+        const newMsg = {
+          id: db.generateUUID(),
+          chatId: this.chatId,
+          timestamp: Date.now(),
+          sender: currentMe,
+          isOutgoing: true,
+          text: caption,
+          mediaId,
+          mediaName: filename,
+          mediaType: 'image',
+          isWhiteboard: true,
+          whiteboardData
+        };
+        const nestedParentId = this.nestingUnderMsg?.id || null;
+        this.applyReplyTo(newMsg, true);
+        await db.saveMessage(newMsg);
+        await db.updateChat(this.chatId, {
+          lastMessage: caption ? `🎨 ${stripRichMarkup(caption)}` : '🎨 Whiteboard',
+          updatedAt: Date.now()
+        });
+
+        if (this.richComposer) {
+          this.richComposer.clear();
+          this._resetPendingLinkPreview?.();
+          this._resetInputComposerHeight?.();
+        }
+
+        this.scroller.allMessages.push(newMsg);
+        if (nestedParentId) {
+          const nestRes = computeContiguousNestInsert(
+            this.scroller.allMessages,
+            nestedParentId,
+            [newMsg.id],
+            this.scroller.nestedChildrenByParentId
+          );
+          if (nestRes.changed && nestRes.updates.length > 0) {
+            const uMap = new Map(nestRes.updates.map((u) => [String(u.id), u]));
+            const toSave = [];
+            for (const m of nestRes.reordered) {
+              const u = uMap.get(String(m.id));
+              if (u) { m.timestamp = u.timestamp; m.seq = u.seq; m.displayTimestamp = u.displayTimestamp; toSave.push(m); }
+            }
+            await db.saveMessages(toSave);
+            await this.scroller.loadInitial(newMsg.id);
+            return;
+          }
+        }
+        this.scroller.rebuildMessageIndexes();
+        this.scroller.visibleEndIndex = this.scroller.allMessages.length;
+        const msgEl = await this.scroller.createMessageElement(newMsg);
+        this.container.querySelector('#chat-messages-wrap').appendChild(msgEl);
+        this.scroller.scheduleTreeConnectorRedraw();
+        this.scroller.scrollToBottom(true);
+      }
+    });
+  }
+
+  async _handleEditWhiteboardEvent(detail) {
+    if (!detail) return;
+    const { msg, mediaItem, inlineMediaId } = detail;
+    const targetMediaId = inlineMediaId || msg?.mediaId || mediaItem?.id;
+    if (!targetMediaId) return;
+    const freshMedia = mediaItem || await db.getMedia(targetMediaId);
+    const initialScene = freshMedia?.whiteboardData || msg?.whiteboardData || null;
+
+    whiteboardModal.open({
+      initialScene,
+      isEditing: true,
+      onDone: async ({ blob, whiteboardData }) => {
+        if (!blob) return;
+        const updatedMedia = {
+          ...(freshMedia || { id: targetMediaId, chatId: this.chatId, filename: `whiteboard_${Date.now()}.png`, type: 'image', mimeType: 'image/png' }),
+          blob,
+          size: blob.size || 0,
+          isWhiteboard: true,
+          whiteboardData,
+          timestamp: Date.now()
+        };
+        await db.saveMedia(updatedMedia);
+
+        if (this.scroller?.mediaCache?.has(targetMediaId)) {
+          try { URL.revokeObjectURL(this.scroller.mediaCache.get(targetMediaId)); } catch (_) {}
+          this.scroller.mediaCache.delete(targetMediaId);
+        }
+
+        if (msg && msg.id && !inlineMediaId) {
+          await db.updateMessage(msg.id, { whiteboardData, isWhiteboard: true });
+          const inScroller = this.scroller?.allMessages?.find((x) => String(x.id) === String(msg.id));
+          if (inScroller) {
+            inScroller.whiteboardData = whiteboardData;
+            inScroller.isWhiteboard = true;
+            await this.scroller.updateMessageInPlace(inScroller);
+          }
+        } else if (msg && msg.id) {
+          const inScroller = this.scroller?.allMessages?.find((x) => String(x.id) === String(msg.id));
+          if (inScroller) {
+            await this.scroller.updateMessageInPlace(inScroller);
+          }
+        }
+        Toast.show('Whiteboard saved');
+      }
+    });
+  }
+
+  // --- Compact Inline Voice Recorder Modal (Inserts Voice Embed directly into RichComposer) ---
+  _openInlineVoiceRecorderModal() {
+    document.querySelector('.inline-voice-modal-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay inline-voice-modal-overlay active';
+    overlay.innerHTML = `
+      <div class="custom-dialog-card inline-voice-card" role="dialog" aria-modal="true">
+        <h3 class="custom-dialog-title">Record Inline Voice Note</h3>
+        <div class="inline-voice-timer" id="iv-timer">0:00</div>
+        <div class="inline-voice-actions">
+          <button type="button" class="dialog-btn dialog-btn-cancel" id="iv-cancel">Cancel</button>
+          <button type="button" class="dialog-btn dialog-btn-confirm" id="iv-rec-toggle">Start Recording</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const timerEl = overlay.querySelector('#iv-timer');
+    const toggleBtn = overlay.querySelector('#iv-rec-toggle');
+    const cancelBtn = overlay.querySelector('#iv-cancel');
+    let recorder = null;
+    let isRec = false;
+
+    const cleanup = () => {
+      if (recorder && isRec) {
+        try { recorder.cancel(); } catch (_) {}
+      }
+      overlay.remove();
+    };
+
+    cancelBtn.addEventListener('click', cleanup);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(); });
+
+    toggleBtn.addEventListener('click', async () => {
+      if (!isRec) {
+        recorder = new VoiceRecorder({
+          onTick: (sec) => {
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`;
+          }
+        });
+        const ok = await recorder.start();
+        if (!ok) {
+          Toast.show('Microphone permission denied');
+          cleanup();
+          return;
+        }
+        isRec = true;
+        toggleBtn.textContent = 'Stop & Insert';
+        toggleBtn.classList.add('is-recording');
+      } else {
+        isRec = false;
+        toggleBtn.disabled = true;
+        const result = await recorder.stop();
+        overlay.remove();
+        if (result && result.blob && this.richComposer) {
+          const mediaId = db.generateUUID();
+          const durSec = Math.max(1, Math.round(result.duration || 1));
+          const label = `Voice note (${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')})`;
+          await db.saveMedia({
+            id: mediaId,
+            chatId: this.chatId,
+            filename: `voice_${Date.now()}.wav`,
+            type: 'audio',
+            mimeType: 'audio/wav',
+            duration: durSec,
+            size: result.blob.size || 0,
+            blob: result.blob,
+            timestamp: Date.now()
+          });
+          this.richComposer.insertEmbed({ kind: 'audio', mediaId, layout: 'full', label });
+          Toast.show('Voice note inserted inside text');
+        }
+      }
+    });
+  }
+
+  // --- Fluid Drag-to-Reorder Selected Messages Directly in Chat (Unified DND Pattern) ---
+  _startSelectedMessagesDragReorder(anchorMsg, anchorRow, startEvt) {
+    if (!this.isSelectionMode || !this.scroller || !anchorRow) return;
+    const messagesWrap = this.container?.querySelector('#chat-messages-wrap');
+    if (!messagesWrap) return;
+
+    const expandedSet = expandSelectionWithNestedSubtrees(
+      this.scroller.allMessages,
+      this.selectedMessageIds,
+      this.scroller.nestedChildrenByParentId
+    );
+    if (expandedSet.size === 0) return;
+
+    this.reactionBar?.hide();
+    if (navigator.vibrate) try { navigator.vibrate(25); } catch (_) {}
+
+    const allDomRows = Array.from(messagesWrap.querySelectorAll('.msg-row[data-msg-id]'));
+    const movedRows = [];
+    const remainingRows = [];
+    for (const r of allDomRows) {
+      if (expandedSet.has(String(r.dataset.msgId))) movedRows.push(r);
+      else if (!r.classList.contains('is-hidden-by-collapse')) remainingRows.push(r);
+    }
+    if (movedRows.length === 0) return;
+
+    const anchorRect = anchorRow.getBoundingClientRect();
+    const startClientY = startEvt?.clientY ?? (startEvt?.touches?.[0]?.clientY ?? (anchorRect.top + anchorRect.height / 2));
+    const startClientX = startEvt?.clientX ?? (startEvt?.touches?.[0]?.clientX ?? (anchorRect.left + anchorRect.width / 2));
+
+    // Build single compact floating bubble card (1-line truncated text + '...' + time/ticks footer + count badge)
+    const previewText = this._getMessagePreviewText(anchorMsg);
+    const footerTime = this.scroller.formatMessageFooterTimestamp(anchorMsg.displayTimestamp ?? anchorMsg.timestamp);
+    const checksHtml = anchorMsg.isOutgoing ? Icons.checks(true, 'receipt-check', 15) : '';
+    const stackCard = document.createElement('div');
+    stackCard.className = `chat-drag-stack-card ${anchorMsg.isOutgoing ? 'is-outgoing' : 'is-incoming'} ${expandedSet.size > 1 ? 'has-multi' : ''}`;
+    stackCard.innerHTML = `
+      <div class="chat-drag-stack-bubble">
+        <div class="chat-drag-stack-line" dir="auto">${this._escHtml(previewText)}</div>
+        <div class="chat-drag-stack-footer">
+          <span class="msg-time">${this._escHtml(footerTime)}</span>
+          ${checksHtml}
+        </div>
+      </div>
+      ${expandedSet.size > 1 ? `<span class="chat-drag-stack-badge">${expandedSet.size}</span>` : ''}
+    `;
+
+    const cardWidth = Math.min(Math.max(240, Math.round(anchorRect.width * 0.85)), messagesWrap.clientWidth - 28);
+    const cardLeft = Math.round(Math.max(14, Math.min(window.innerWidth - cardWidth - 14, startClientX - cardWidth / 2)));
+    const cardHeight = 64;
+    let currentTop = Math.round(startClientY - cardHeight / 2 - 8);
+    stackCard.style.width = `${cardWidth}px`;
+    stackCard.style.left = `${cardLeft}px`;
+    stackCard.style.top = `${currentTop}px`;
+    document.body.appendChild(stackCard);
+
+    let currentDomSlot = remainingRows.length;
+    for (let i = 0; i < remainingRows.length; i++) {
+      if (remainingRows[i].compareDocumentPosition(anchorRow) & Node.DOCUMENT_POSITION_PRECEDING) {
+        currentDomSlot = i;
+        break;
+      }
+    }
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'chat-drag-drop-gap';
+    placeholder.style.height = `${cardHeight}px`;
+
+    const beforeRects = remainingRows.map((r) => r.getBoundingClientRect().top);
+    movedRows.forEach((r) => r.classList.add('is-chat-drag-lifted'));
+    if (currentDomSlot >= remainingRows.length) {
+      messagesWrap.appendChild(placeholder);
+    } else {
+      messagesWrap.insertBefore(placeholder, remainingRows[currentDomSlot]);
+    }
+    remainingRows.forEach((r, idx) => {
+      const delta = beforeRects[idx] - r.getBoundingClientRect().top;
+      if (Math.abs(delta) > 0.5) {
+        r.style.transition = 'none';
+        r.style.transform = `translateY(${delta}px)`;
+        requestAnimationFrame(() => {
+          r.style.transition = 'transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1)';
+          r.style.transform = '';
+        });
+      }
+    });
+
+    messagesWrap.classList.add('is-chat-reordering');
+    let latestY = startClientY;
+    let active = true;
+    let autoScrollRaf = null;
+
+    const runAutoScroll = () => {
+      if (!active) return;
+      const wRect = messagesWrap.getBoundingClientRect();
+      if (latestY < wRect.top + 56) messagesWrap.scrollTop -= 10;
+      else if (latestY > wRect.bottom - 56) messagesWrap.scrollTop += 10;
+      autoScrollRaf = requestAnimationFrame(runAutoScroll);
+    };
+    autoScrollRaf = requestAnimationFrame(runAutoScroll);
+
+    const flipGapToSlot = (nextSlot) => {
+      const prevTops = remainingRows.map((r) => r.getBoundingClientRect().top);
+      if (nextSlot >= remainingRows.length) {
+        messagesWrap.appendChild(placeholder);
+      } else {
+        messagesWrap.insertBefore(placeholder, remainingRows[nextSlot]);
+      }
+      remainingRows.forEach((r, idx) => {
+        const delta = prevTops[idx] - r.getBoundingClientRect().top;
+        if (Math.abs(delta) > 0.5) {
+          r.style.transition = 'none';
+          r.style.transform = `translateY(${delta}px)`;
+          requestAnimationFrame(() => {
+            r.style.transition = 'transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1)';
+            r.style.transform = '';
+          });
+        }
+      });
+    };
+
+    const handleMove = (ev) => {
+      if (!active) return;
+      const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
+      const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
+      if (cy === undefined) return;
+      if (ev.cancelable) ev.preventDefault();
+      latestY = cy;
+      currentTop = Math.round(cy - cardHeight / 2 - 8);
+      stackCard.style.top = `${currentTop}px`;
+      if (cx !== undefined) {
+        const shiftX = (cx - startClientX) * 0.12;
+        stackCard.style.left = `${Math.round(cardLeft + shiftX)}px`;
+      }
+
+      const centerY = currentTop + cardHeight / 2;
+      let nextSlot = remainingRows.length;
+      for (let i = 0; i < remainingRows.length; i++) {
+        const rRect = remainingRows[i].getBoundingClientRect();
+        if (centerY < rRect.top + rRect.height / 2) {
+          nextSlot = i;
+          break;
+        }
+      }
+      if (nextSlot !== currentDomSlot) {
+        flipGapToSlot(nextSlot);
+        currentDomSlot = nextSlot;
+      }
+    };
+
+    const finishDrag = async (cancelled = false) => {
+      if (!active) return;
+      active = false;
+      if (autoScrollRaf) cancelAnimationFrame(autoScrollRaf);
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', onUp);
+      window.removeEventListener('touchcancel', onCancel);
+
+      const allRemaining = this.scroller.allMessages.filter((m) => !expandedSet.has(String(m.id)));
+      let targetGlobalSlot = allRemaining.length;
+      if (currentDomSlot < remainingRows.length) {
+        const refId = String(remainingRows[currentDomSlot].dataset.msgId);
+        const foundIdx = allRemaining.findIndex((m) => String(m.id) === refId);
+        if (foundIdx !== -1) targetGlobalSlot = foundIdx;
+      } else if (remainingRows.length > 0) {
+        const lastRefId = String(remainingRows[remainingRows.length - 1].dataset.msgId);
+        const foundIdx = allRemaining.findIndex((m) => String(m.id) === lastRefId);
+        if (foundIdx !== -1) targetGlobalSlot = foundIdx + 1;
+      }
+
+      const gapRect = placeholder.getBoundingClientRect();
+      stackCard.classList.add('is-landing');
+      stackCard.style.top = `${Math.round(gapRect.top)}px`;
+      stackCard.style.left = `${Math.round(gapRect.left + Math.max(0, (gapRect.width - cardWidth) / 2))}px`;
+
+      await new Promise((r) => setTimeout(r, 210));
+
+      stackCard.remove();
+      placeholder.remove();
+      messagesWrap.classList.remove('is-chat-reordering');
+      movedRows.forEach((r) => r.classList.remove('is-chat-drag-lifted'));
+      remainingRows.forEach((r) => { r.style.transition = ''; r.style.transform = ''; });
+
+      if (cancelled) return;
+
+      const res = buildReorderedMessagesList(this.scroller.allMessages, expandedSet, targetGlobalSlot);
+      if (res.changed && res.updates.length > 0) {
+        const uMap = new Map(res.updates.map((u) => [String(u.id), u]));
+        const toSave = [];
+        for (const m of res.reordered) {
+          const u = uMap.get(String(m.id));
+          if (u) {
+            m.timestamp = u.timestamp;
+            m.seq = u.seq;
+            m.displayTimestamp = u.displayTimestamp;
+            toSave.push(m);
+          }
+        }
+        await db.saveMessages(toSave);
+        const lastM = res.reordered[res.reordered.length - 1];
+        if (lastM) {
+          await db.updateChat(this.chatId, { lastMessage: this._getMessagePreviewText(lastM) });
+        }
+        const savedScrollTop = messagesWrap.scrollTop;
+        this.exitSelectionMode();
+        await this.scroller.loadInitial(anchorMsg.id);
+        messagesWrap.scrollTop = savedScrollTop;
+        Toast.show(expandedSet.size > 1 ? `Reordered ${expandedSet.size} messages` : 'Message reordered');
+      } else {
+        this.scroller.scheduleTreeConnectorRedraw();
+      }
+    };
+
+    const onUp = () => finishDrag(false);
+    const onCancel = () => finishDrag(true);
+    window.addEventListener('pointermove', handleMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+    window.addEventListener('touchcancel', onCancel);
+  }
+
   cleanup() {
+    clearTimeout(this._floatingDateTimer);
+    if (this._onEditWhiteboardBound) {
+      window.removeEventListener('wa:edit-whiteboard', this._onEditWhiteboardBound);
+      this._onEditWhiteboardBound = null;
+    }
+    this._closeAttachDrawer?.(true);
     clearTimeout(this._linkPreviewDebounce);
     if (this._linkPreviewAbort) {
       this._linkPreviewAbort.abort();

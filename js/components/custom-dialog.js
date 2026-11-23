@@ -217,7 +217,7 @@ export function showLoadingDialog({
   overlay.innerHTML = `
     <div class="custom-dialog-card swap-loading-card" role="dialog" aria-modal="true" style="padding: 24px; max-width: 320px;">
       <div style="display: flex; align-items: center; gap: 18px;">
-        <div class="progress-spinner" style="width: 38px; height: 38px; min-width: 38px; border-width: 3.5px; border-color: rgba(255, 255, 255, 0.12); border-top-color: var(--wa-green, #00a884);"></div>
+        <div class="progress-spinner" style="width: 38px; height: 38px; min-width: 38px; border-width: 3.5px; border-color: rgba(255, 255, 255, 0.12); border-top-color: var(--app-accent);"></div>
         <div style="display: flex; flex-direction: column; gap: 4px; overflow: hidden;">
           <h3 class="custom-dialog-title" id="loading-dialog-title" style="font-size: 16px; font-weight: 500; margin: 0; color: var(--wa-text-primary, #e9edef);">${escapeHtml(title)}</h3>
           <div class="custom-dialog-body" id="loading-dialog-sub" style="font-size: 13.5px; margin: 0; color: var(--wa-text-secondary, #8696a0);">${escapeHtml(message)}</div>
@@ -225,7 +225,7 @@ export function showLoadingDialog({
       </div>
       ${cancelText ? `
         <div class="custom-dialog-actions" style="margin-top: 14px; margin-bottom: -4px;">
-          <button type="button" class="dialog-btn dialog-btn-cancel" id="btn-dialog-cancel" style="color: var(--wa-green, #00a884); font-size: 14px; font-weight: 600; background: none; border: none; padding: 6px 14px; cursor: pointer;">${escapeHtml(cancelText)}</button>
+          <button type="button" class="dialog-btn dialog-btn-cancel" id="btn-dialog-cancel" style="color: var(--app-accent); font-size: 14px; font-weight: 600; background: none; border: none; padding: 6px 14px; cursor: pointer;">${escapeHtml(cancelText)}</button>
         </div>
       ` : ''}
     </div>

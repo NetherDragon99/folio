@@ -1,6 +1,6 @@
-// WhatsApp Android Clone Service Worker v2.3.12
-const APP_VERSION = '2.3.12';
-const CACHE_NAME = 'wa-clone-v2.3.12';
+// WhatsApp Android Clone Service Worker v2.3.13
+const APP_VERSION = '2.3.13';
+const CACHE_NAME = 'wa-clone-v2.3.13';
 
 const APP_SHELL_FILES = [
   './',
@@ -20,6 +20,7 @@ const APP_SHELL_FILES = [
   './js/ui-motion.js',
   './js/virtual-scroller.js',
   './js/utils/background-tasks.js',
+  './js/utils/chat-reorder-dnd.js',
   './js/utils/date-jump.js',
   './js/utils/drawer-resizer.js',
   './js/utils/link-preview.js',
@@ -27,6 +28,7 @@ const APP_SHELL_FILES = [
   './js/utils/nested-tree-dnd.js',
   './js/utils/rich-text.js',
   './js/utils/storage-backup.js',
+  './js/utils/whiteboard-engine.js',
   './js/config/app-icons.js',
   './js/config/base-path.js',
   './js/config/palette.js',
@@ -50,6 +52,7 @@ const APP_SHELL_FILES = [
   './js/components/sticker-drawer.js',
   './js/components/toast.js',
   './js/components/voice-recorder.js',
+  './js/components/whiteboard-modal.js',
   './js/views/app-icon-view.js',
   './js/views/appearance-view.js',
   './js/views/calls-view.js',

@@ -20,11 +20,16 @@
   --wa-text-secondary: #8696a0;
   --wa-text-subtle: #667781;
 
-  /* Accents */
-  --wa-green: #25d366;
+  /* Accents (dynamically updated by applyAppAccent for Dark & Light harmony) */
   --app-accent: #25d366;
+  --app-accent-rgb: 37, 211, 102;
+  --app-accent-fg: #0b141a;
+  --app-accent-soft: #0a332c;
+  --app-accent-hover: #3ede79;
+  --app-accent-border: rgba(37, 211, 102, 0.48);
+  --wa-green: var(--app-accent);
   --accent-color: var(--app-accent);
-  --wa-green-active-chip: #0a332c;
+  --wa-green-active-chip: var(--app-accent-soft);
   --wa-cyan: #53bdeb;
   --wa-danger: #f15c6d;
 
@@ -66,10 +71,15 @@
   --wa-text-subtle: #667781;
 
   /* Accents */
-  --wa-green: #1dab61;
   --app-accent: #1dab61;
+  --app-accent-rgb: 29, 171, 97;
+  --app-accent-fg: #ffffff;
+  --app-accent-soft: #d8fdd2;
+  --app-accent-hover: #179453;
+  --app-accent-border: rgba(29, 171, 97, 0.42);
+  --wa-green: var(--app-accent);
   --accent-color: var(--app-accent);
-  --wa-green-active-chip: #d8fdd2;
+  --wa-green-active-chip: var(--app-accent-soft);
   --wa-cyan: #53bdeb;
   --wa-danger: #ea0038;
 

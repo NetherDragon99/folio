@@ -209,6 +209,10 @@ export class AppearanceView {
         await db.setSetting('themeMode', 'light');
         localStorage.setItem('wa_theme_mode', 'light');
       }
+      const savedAccent = await db.getSetting('appAccentColor', localStorage.getItem('wa_app_accent') || '#25d366');
+      if (savedAccent) {
+        applyAppAccent(savedAccent, !isDark);
+      }
       const savedBubble = await db.getSetting('defaultBubbleColor', null);
       if (savedBubble) {
         applyOutgoingBubbleColor(savedBubble);

@@ -26,6 +26,8 @@ export class VirtualMessageScroller {
     this.onCheckboxToggle = options.onCheckboxToggle || null;
     this.onNestedParentClick = options.onNestedParentClick || null;
     this.onNestedTreeOpen = options.onNestedTreeOpen || null;
+    this.onFloatingDateUpdate = options.onFloatingDateUpdate || null;
+    this.onSelectionReorderHold = options.onSelectionReorderHold || null;
     this.defaultExpandLongMessages = Boolean(options.defaultExpandLongMessages);
     this.isNoteMode = Boolean(options.isNoteMode);
     this.outgoingTheme = options.outgoingTheme || 'slate';
@@ -38,11 +40,13 @@ export class VirtualMessageScroller {
     this.pickNestParentMode = false;
 
     this.messageExpandState = new Map();
+    this.collapsedNestedParents = new Set();
     this.nestedChildrenByParentId = new Map();
     this.nestedDepthByMsgId = new Map();
     this.nestLayoutByMsgId = new Map();
     this.listPositionByMsgId = new Map();
     this._indexByMsgId = new Map();
+    this._treeSvgRedrawRaf = null;
 
     // Background task media listener
     this._onMediaReadyBound = this.handleMediaReady.bind(this);
@@ -114,6 +118,165 @@ export class VirtualMessageScroller {
         year: 'numeric'
       });
     }
+  }
+
+  formatMessageFooterTimestamp(timestamp) {
+    const timeStr = this.formatTime(timestamp);
+    if (!this.isNoteMode || !timestamp) return timeStr;
+    try {
+      const d = new Date(timestamp);
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      return `${dd}/${mm}/${yyyy} • ${timeStr}`;
+    } catch (_) {
+      return timeStr;
+    }
+  }
+
+  _isHiddenByCollapsedAncestor(msgId) {
+    if (!this.collapsedNestedParents || this.collapsedNestedParents.size === 0) return false;
+    const msgById = new Map(this.allMessages.map((m) => [String(m.id), m]));
+    let cur = msgById.get(String(msgId));
+    const visited = new Set([String(msgId)]);
+    while (cur && cur.nestedParent && cur.nestedParent.id) {
+      const pid = String(cur.nestedParent.id);
+      if (this.collapsedNestedParents.has(pid)) return true;
+      if (visited.has(pid)) break;
+      visited.add(pid);
+      cur = msgById.get(pid) || null;
+    }
+    return false;
+  }
+
+  toggleNestedCollapse(parentId) {
+    const pid = String(parentId);
+    if (this.collapsedNestedParents.has(pid)) {
+      this.collapsedNestedParents.delete(pid);
+    } else {
+      this.collapsedNestedParents.add(pid);
+    }
+
+    // Refresh visibility of all rendered rows and update parent collapse indicator
+    if (this.container && typeof this.container.querySelectorAll === 'function') {
+      this.container.querySelectorAll('.msg-row[data-msg-id]').forEach((r) => {
+        const rId = r.dataset.msgId;
+        const hidden = this._isHiddenByCollapsedAncestor(rId);
+        r.classList.toggle('is-hidden-by-collapse', hidden);
+      });
+      const parentRow = this.findMessageElement(pid);
+      if (parentRow) {
+        const isCollapsed = this.collapsedNestedParents.has(pid);
+        parentRow.classList.toggle('is-nested-parent-collapsed', isCollapsed);
+        const togglePill = parentRow.querySelector('.nested-collapse-indicator');
+        if (togglePill) {
+          const descCount = this._countSubtreeDescendants(pid);
+          togglePill.classList.toggle('is-collapsed', isCollapsed);
+          togglePill.textContent = isCollapsed ? `▸ ${descCount} nested` : `▾`;
+          togglePill.title = isCollapsed ? `Expand ${descCount} nested messages` : 'Collapse nested messages';
+        }
+      }
+    }
+    this.scheduleTreeConnectorRedraw();
+  }
+
+  scheduleTreeConnectorRedraw() {
+    if (!this.container || typeof this.container.getBoundingClientRect !== 'function') return;
+    if (this._treeSvgRedrawRaf) cancelAnimationFrame(this._treeSvgRedrawRaf);
+    this._treeSvgRedrawRaf = requestAnimationFrame(() => {
+      this._treeSvgRedrawRaf = null;
+      this.redrawNestedTreeConnectors();
+    });
+  }
+
+  redrawNestedTreeConnectors() {
+    if (!this.container || typeof this.container.querySelector !== 'function') return;
+    let svg = this.container.querySelector(':scope > .chat-nested-tree-svg');
+    if (this.nestedChildrenByParentId.size === 0) {
+      if (svg) svg.remove();
+      return;
+    }
+
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'chat-nested-tree-svg');
+      svg.setAttribute('aria-hidden', 'true');
+      this.container.prepend(svg);
+    }
+
+    const contRect = this.container.getBoundingClientRect();
+    const scrollTop = this.container.scrollTop || 0;
+    const scrollLeft = this.container.scrollLeft || 0;
+    const fullW = Math.max(this.container.scrollWidth || 0, Math.round(contRect.width));
+    const fullH = Math.max(this.container.scrollHeight || 0, Math.round(contRect.height));
+
+    svg.setAttribute('width', String(fullW));
+    svg.setAttribute('height', String(fullH));
+    svg.style.width = `${fullW}px`;
+    svg.style.height = `${fullH}px`;
+
+    // Build quick lookup of visible row bubbles
+    const bubbleMetrics = new Map();
+    const msgById = new Map(this.allMessages.map((m) => [String(m.id), m]));
+    this.container.querySelectorAll('.msg-row[data-msg-id]').forEach((r) => {
+      if (r.classList.contains('is-hidden-by-collapse')) return;
+      const b = r.querySelector('.msg-bubble');
+      if (!b) return;
+      const rect = b.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return;
+      bubbleMetrics.set(String(r.dataset.msgId), {
+        top: rect.top - contRect.top + scrollTop,
+        bottom: rect.bottom - contRect.top + scrollTop,
+        left: rect.left - contRect.left + scrollLeft,
+        right: rect.right - contRect.left + scrollLeft,
+        height: rect.height
+      });
+    });
+
+    const pathParts = [];
+    for (const [parentIdStr, children] of this.nestedChildrenByParentId.entries()) {
+      if (this.collapsedNestedParents.has(parentIdStr)) continue;
+      const pMetric = bubbleMetrics.get(parentIdStr);
+      if (!pMetric) continue;
+      const parentMsg = msgById.get(parentIdStr);
+      if (!parentMsg) continue;
+
+      const visibleChildren = [];
+      for (const ch of children) {
+        const cm = bubbleMetrics.get(String(ch.id));
+        if (cm) visibleChildren.push({ msg: ch, metric: cm });
+      }
+      if (visibleChildren.length === 0) continue;
+
+      // Sort children top-to-bottom visually
+      visibleChildren.sort((a, b) => a.metric.top - b.metric.top);
+
+      // Anchor vertical spine flush to parent's outer corner (left for incoming & Note Mode; right for outgoing in normal chat)
+      const parentSide = this._getEffectiveNestSide(parentMsg);
+      const spineX = Math.round(parentSide === 'right' ? (pMetric.right - 6) : (pMetric.left + 6));
+      const startY = Math.round(pMetric.bottom);
+
+      let maxBranchY = startY;
+      for (const { metric: cm } of visibleChildren) {
+        const branchY = Math.round(cm.top + Math.min(20, Math.max(12, cm.height * 0.34)));
+        if (branchY > maxBranchY) maxBranchY = branchY;
+        // Extend cleanly to the nearest side edge of the child bubble — handles both same-side AND opposite-side children!
+        const targetX = Math.round(
+          cm.left >= spineX
+            ? cm.left
+            : (cm.right <= spineX ? cm.right : (parentSide === 'right' ? cm.right : cm.left))
+        );
+        pathParts.push(`M ${spineX} ${branchY} L ${targetX} ${branchY}`);
+      }
+
+      if (maxBranchY > startY) {
+        pathParts.push(`M ${spineX} ${startY} L ${spineX} ${maxBranchY}`);
+      }
+    }
+
+    svg.innerHTML = pathParts.length > 0
+      ? `<path class="chat-nested-tree-path" d="${pathParts.join(' ')}" />`
+      : '';
   }
 
   // Format message time: "7:51 pm"
@@ -502,7 +665,7 @@ export class VirtualMessageScroller {
   }
 
   isVisualMedia(msg) {
-    if (!msg || msg.isSystem || this.isSticker(msg)) return false;
+    if (!msg || msg.isSystem || this.isSticker(msg) || msg.isWhiteboard || msg.whiteboardData) return false;
     if (msg.mediaType === 'image' || msg.mediaType === 'video') return true;
     if (msg.mediaName && /\.(jpg|jpeg|png|webp|gif|mp4|mov|webm)$/i.test(msg.mediaName)) return true;
     return false;
@@ -586,14 +749,27 @@ export class VirtualMessageScroller {
       startX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
       startY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
 
+      const isSelectedRow = row.classList.contains('is-msg-selected') || row.classList.contains('is-selected');
+      const holdDelay = (this.selectionMode && isSelectedRow && typeof this.onSelectionReorderHold === 'function')
+        ? 320
+        : 450;
+
       this.activeLongPressTimer = setTimeout(() => {
         if (!isSwiping && isPointerDown) {
           row._suppressClickUntil = Date.now() + 700;
           row._suppressContextMenuUntil = Date.now() + 700;
-          onLongPress(e);
+          const stillSelected = row.classList.contains('is-msg-selected') || row.classList.contains('is-selected');
+          if (this.selectionMode && stillSelected && typeof this.onSelectionReorderHold === 'function') {
+            isPointerDown = false;
+            window.removeEventListener('mousemove', onWindowMouseMove);
+            window.removeEventListener('mouseup', onWindowMouseUp);
+            this.onSelectionReorderHold(msg, row, e);
+          } else {
+            onLongPress(e);
+          }
           this.activeLongPressTimer = null;
         }
-      }, 450);
+      }, holdDelay);
 
       // Attach window listeners for mouse drag so dragging continues smoothly across screen
       if (e.type === 'mousedown') {
@@ -816,6 +992,23 @@ export class VirtualMessageScroller {
         }
       }
 
+      // Note Mode floating scroll date pill (shows ONLY during scrolling, auto-hides after 3s in ChatView)
+      if (this.isNoteMode && typeof this.onFloatingDateUpdate === 'function') {
+        const contRect = this.container.getBoundingClientRect();
+        const rows = this.container.querySelectorAll('.msg-row[data-timestamp]');
+        for (const r of rows) {
+          if (r.classList.contains('is-hidden-by-collapse')) continue;
+          const rRect = r.getBoundingClientRect();
+          if (rRect.bottom >= contRect.top + 8) {
+            const ts = Number(r.dataset.timestamp);
+            if (ts) {
+              this.onFloatingDateUpdate(this.formatDatePill(ts));
+            }
+            break;
+          }
+        }
+      }
+
       // If auto-scrolling is active (scrollToBottom glide, jumpToDate, scrollToMessage), mute boundary loading!
       if (this.isAutoScrolling) {
         return;
@@ -950,11 +1143,13 @@ export class VirtualMessageScroller {
       if (!msg) continue;
 
       const dateStr = this.formatDatePill(msg.timestamp);
-      if (dateStr !== lastDateStr) {
+      if (!this.isNoteMode && dateStr !== lastDateStr) {
         const datePill = document.createElement('div');
         datePill.className = 'date-pill-row';
         datePill.innerHTML = `<span class="date-pill">${dateStr}</span>`;
         fragment.appendChild(datePill);
+        lastDateStr = dateStr;
+      } else if (this.isNoteMode) {
         lastDateStr = dateStr;
       }
 
@@ -1004,6 +1199,7 @@ export class VirtualMessageScroller {
     }
 
     await this._hydrateReadyPlaceholders();
+    this.scheduleTreeConnectorRedraw();
   }
 
   // --- Multi-Image Album Grid inside Chat Bubbles (Step 4) ---
@@ -1093,6 +1289,7 @@ export class VirtualMessageScroller {
     row.className = `msg-row ${firstMsg.isOutgoing ? 'outgoing' : 'incoming'} album-msg-row`;
     row.id = `msg-${firstMsg.id}`;
     row.dataset.msgId = String(firstMsg.id);
+    row.dataset.timestamp = String(firstMsg.displayTimestamp ?? firstMsg.timestamp ?? '');
     row.dataset.msgCount = String(albumMsgs.length);
     row.dataset.albumIds = albumMsgs.map((m) => m.id).join(',');
     row.dataset.mediaIds = albumMsgs.map((m) => m.mediaId).filter(Boolean).join(',');
@@ -1322,7 +1519,7 @@ export class VirtualMessageScroller {
       if (firstMsg.isOutgoing) {
         checksHtml = Icons.checks(true, 'receipt-check', 15);
       }
-      metaRow.innerHTML = `${albumStarHtml}${albumPinHtml}<span class="album-meta-time">${this.formatTime(lastMsg.displayTimestamp ?? lastMsg.timestamp)}</span>${checksHtml}`;
+      metaRow.innerHTML = `${albumStarHtml}${albumPinHtml}<span class="album-meta-time">${this.formatMessageFooterTimestamp(lastMsg.displayTimestamp ?? lastMsg.timestamp)}</span>${checksHtml}`;
       bubble.appendChild(metaRow);
     }
     this._applyStructuralDecorations(row, bubble, firstMsg);
@@ -1362,6 +1559,7 @@ export class VirtualMessageScroller {
     row.className = `msg-row ${msg.isOutgoing ? 'outgoing' : 'incoming'}`;
     row.id = `msg-${msg.id}`;
     row.dataset.msgId = String(msg.id);
+    row.dataset.timestamp = String(msg.displayTimestamp ?? msg.timestamp ?? '');
     if (msg.mediaId) row.dataset.mediaId = String(msg.mediaId);
     row.dataset.msgCount = '1';
 
@@ -1466,7 +1664,7 @@ export class VirtualMessageScroller {
     const isPinned = this.pinnedMessageIds && this.pinnedMessageIds.has(String(msg.id));
     const pinHtml = isPinned ? `<span class="msg-pin-badge" title="Pinned">${Icons.pin('pin-icon-meta', 11)}</span>` : '';
     const editedHtml = msg.isEdited ? '<span class="edited-tag">Edited</span>' : '';
-    metaSpan.innerHTML = `${editedHtml}${starHtml}${pinHtml}<span class="msg-time">${this.formatTime(msg.displayTimestamp ?? msg.timestamp)}</span>${checksHtml}`;
+    metaSpan.innerHTML = `${editedHtml}${starHtml}${pinHtml}<span class="msg-time">${this.formatMessageFooterTimestamp(msg.displayTimestamp ?? msg.timestamp)}</span>${checksHtml}`;
     bubble.appendChild(metaSpan);
 
     // Apply independent list markers + multi-level nested tree badges & connectors
@@ -1521,7 +1719,7 @@ export class VirtualMessageScroller {
     // Bar color
     const barColor = (this.chat && this.chat.isGroup && replyTo.sender && replyTo.sender !== 'You')
       ? this.getParticipantColor(replyTo.sender)
-      : 'var(--app-accent, #25d366)';
+      : 'var(--app-accent)';
 
     // Snippet label & Icon
     let snippetText = replyTo.text || '';
@@ -1602,7 +1800,10 @@ export class VirtualMessageScroller {
       'has-following-sibling',
       'is-sibling-connector',
       'nest-side-left',
-      'nest-side-right'
+      'nest-side-right',
+      'is-hidden-by-collapse',
+      'is-nested-parent',
+      'is-nested-parent-collapsed'
     );
     delete row.dataset.nestDepth;
     row.style.removeProperty('--nest-visual-depth');
@@ -1610,6 +1811,12 @@ export class VirtualMessageScroller {
     bubble.querySelector('.msg-list-badge')?.remove();
     bubble.querySelector('.nested-ref-header')?.remove();
     bubble.querySelector('.nested-children-pill')?.remove();
+    bubble.querySelector('.nested-collapse-indicator')?.remove();
+
+    // Hide descendant row if any ancestor is currently collapsed in main chat
+    if (this._isHiddenByCollapsedAncestor(idStr)) {
+      row.classList.add('is-hidden-by-collapse');
+    }
 
     // System B (Independent Message Lists — always simple 1, 2, 3 or •)
     const listInfo = this.listPositionByMsgId.get(idStr);
@@ -1623,53 +1830,20 @@ export class VirtualMessageScroller {
       bubble.prepend(badge);
     }
 
-    // System A (Multi-Level Side-Aware Tree Nesting — A -> B -> C...)
+    // System A (Multi-Level Side-Aware Tree Nesting — drawn by continuous SVG spine overlay!)
     const layout = this.nestLayoutByMsgId.get(idStr);
     const depth = layout ? layout.depth : (this.nestedDepthByMsgId.get(idStr) || 0);
     if (depth > 0 && msg.nestedParent && msg.nestedParent.id) {
-      const effectiveLayout = layout || {
-        depth,
-        visualDepth: 1,
-        side: this._getEffectiveNestSide(msg),
-        connectsUp: false,
-        connectsDown: false,
-        passThroughCols: []
-      };
+      const effectiveSide = this._getEffectiveNestSide(msg);
+      const effectiveVisualDepth = Math.min(5, Math.max(1, depth));
 
       row.classList.add(
         'is-nested-msg',
-        effectiveLayout.side === 'right' ? 'nest-side-right' : 'nest-side-left'
+        effectiveSide === 'right' ? 'nest-side-right' : 'nest-side-left',
+        'has-tree-connector'
       );
       row.dataset.nestDepth = String(depth);
-      row.style.setProperty('--nest-visual-depth', String(effectiveLayout.visualDepth));
-
-      row.classList.toggle('has-tree-connector', Boolean(effectiveLayout.connectsUp));
-      row.classList.toggle('has-following-sibling', Boolean(effectiveLayout.connectsDown));
-
-      const railsEl = document.createElement('div');
-      railsEl.className = 'nest-tree-rails';
-      railsEl.setAttribute('aria-hidden', 'true');
-
-      for (const col of effectiveLayout.passThroughCols) {
-        const trunkEl = document.createElement('span');
-        trunkEl.className = 'nest-rail-trunk';
-        trunkEl.style.setProperty('--rail-col', String(col));
-        railsEl.appendChild(trunkEl);
-      }
-
-      const elbowEl = document.createElement('span');
-      elbowEl.className = `nest-rail-elbow ${effectiveLayout.connectsUp ? 'is-connected-up' : 'is-standalone'}`;
-      elbowEl.style.setProperty('--rail-col', String(effectiveLayout.visualDepth));
-      railsEl.appendChild(elbowEl);
-
-      if (effectiveLayout.connectsDown) {
-        const contEl = document.createElement('span');
-        contEl.className = 'nest-rail-continue';
-        contEl.style.setProperty('--rail-col', String(effectiveLayout.visualDepth));
-        railsEl.appendChild(contEl);
-      }
-
-      row.prepend(railsEl);
+      row.style.setProperty('--nest-visual-depth', String(effectiveVisualDepth));
 
       const refHeader = document.createElement('div');
       refHeader.className = 'nested-ref-header';
@@ -1701,10 +1875,26 @@ export class VirtualMessageScroller {
       bubble.insertBefore(refHeader, anchor);
     }
 
-    // Parent tree summary pill (shown if any child messages are nested under this message)
+    // Parent tree controls: Collapsible directly in main chat (open by default) + Tree Manager Sheet pill
     const directChildren = this.nestedChildrenByParentId.get(idStr) || [];
     if (directChildren.length > 0) {
       const descCount = this._countSubtreeDescendants(idStr);
+      const isCollapsed = this.collapsedNestedParents.has(idStr);
+      row.classList.add('is-nested-parent');
+      row.classList.toggle('is-nested-parent-collapsed', isCollapsed);
+
+      const collapseBadge = document.createElement('button');
+      collapseBadge.type = 'button';
+      collapseBadge.className = `nested-collapse-indicator${isCollapsed ? ' is-collapsed' : ''}`;
+      collapseBadge.textContent = isCollapsed ? `▸ ${descCount} nested` : '▾';
+      collapseBadge.title = isCollapsed ? `Expand ${descCount} nested messages` : 'Collapse nested messages';
+      collapseBadge.addEventListener('click', (e) => {
+        if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) return;
+        e.stopPropagation();
+        e.preventDefault();
+        this.toggleNestedCollapse(idStr);
+      });
+
       const pill = document.createElement('button');
       pill.type = 'button';
       pill.className = 'nested-children-pill';
@@ -1722,8 +1912,28 @@ export class VirtualMessageScroller {
       });
 
       const metaSpan = bubble.querySelector('.msg-meta, .album-meta-row, .album-caption-block');
-      if (metaSpan) bubble.insertBefore(pill, metaSpan);
-      else bubble.appendChild(pill);
+      if (metaSpan) {
+        bubble.insertBefore(collapseBadge, metaSpan);
+        bubble.insertBefore(pill, metaSpan);
+      } else {
+        bubble.appendChild(collapseBadge);
+        bubble.appendChild(pill);
+      }
+
+      // Bind body-tap collapse directly on parent bubble (strictly ignoring interactive sub-elements!)
+      if (!bubble._nestedCollapseBound) {
+        bubble._nestedCollapseBound = true;
+        bubble.addEventListener('click', (e) => {
+          if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) return;
+          if (!row.classList.contains('is-nested-parent')) return;
+          // Ignore clicks on any interactive element inside the bubble
+          const interactiveSel = 'a, button, input, label, summary, details, .quoted-reply-box, .msg-link-preview-card, .wa-check-row, .wa-fold-block, .wa-spoiler, .media-image-wrap, .media-video-wrap, .voice-note-card, .wa-inline-embed, .msg-reaction-badge, .nested-children-pill, .nested-collapse-indicator, .nested-ref-header, .forwarded-header, .msg-expand-controls';
+          if (e.target.closest && e.target.closest(interactiveSel)) return;
+          const selText = window.getSelection?.()?.toString?.() || '';
+          if (selText.length > 0) return;
+          this.toggleNestedCollapse(row.dataset.msgId);
+        });
+      }
     }
   }
 
@@ -1741,6 +1951,9 @@ export class VirtualMessageScroller {
     bodyEl.setAttribute('dir', 'auto');
     bodyEl.innerHTML = renderRichMessageHtml(slice.displayText, { interactive: true });
     textDiv.appendChild(bodyEl);
+
+    // Hydrate inline embedded media blocks ([embed:image|audio|file|whiteboard:...])
+    this._hydrateInlineEmbeds(bodyEl, msg);
 
     // Interactive checkboxes
     bodyEl.querySelectorAll('.wa-check-input').forEach((inputEl) => {
@@ -1840,6 +2053,96 @@ export class VirtualMessageScroller {
     }
   }
 
+  async _hydrateInlineEmbeds(bodyEl, msg) {
+    if (!bodyEl) return;
+    const embeds = Array.from(bodyEl.querySelectorAll('.wa-inline-embed[data-embed-media-id]'));
+    if (embeds.length === 0) return;
+
+    for (const el of embeds) {
+      const kind = el.dataset.embedKind || 'file';
+      const mediaId = el.dataset.embedMediaId;
+      const label = el.dataset.embedLabel || '';
+      if (!mediaId) continue;
+
+      let mediaItem = null;
+      try {
+        mediaItem = await db.getMedia(mediaId);
+      } catch (_) {}
+
+      if (!mediaItem || !mediaItem.blob) {
+        el.innerHTML = `<div class="wa-embed-file-card"><span>📎</span><span>${this.escapeHtml(label || 'Attachment unavailable')}</span></div>`;
+        continue;
+      }
+
+      let url = this.mediaCache.get(mediaId);
+      if (!url) {
+        url = URL.createObjectURL(mediaItem.blob);
+        this.mediaCache.set(mediaId, url);
+      }
+
+      if (kind === 'image' || kind === 'whiteboard') {
+        const isWb = kind === 'whiteboard' || Boolean(mediaItem.isWhiteboard || mediaItem.whiteboardData);
+        el.innerHTML = `
+          <div class="wa-embed-img-wrap">
+            <img src="${url}" alt="${this.escapeHtml(label || 'Photo')}" class="wa-embed-img" loading="lazy" />
+            ${isWb ? `<button type="button" class="wa-embed-wb-edit-badge" title="Edit Whiteboard">${Icons.edit('', 13)} Edit</button>` : ''}
+          </div>
+        `;
+        const imgEl = el.querySelector('.wa-embed-img');
+        if (imgEl) {
+          imgEl.addEventListener('load', () => this.scheduleTreeConnectorRedraw());
+          imgEl.addEventListener('click', (e) => {
+            if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) return;
+            e.stopPropagation();
+            const virtualMsg = {
+              ...msg,
+              mediaId,
+              mediaType: 'image',
+              mediaName: mediaItem.filename || label || 'image.png',
+              isWhiteboard: isWb,
+              whiteboardData: mediaItem.whiteboardData || null,
+              _inlineEmbedMediaId: mediaId
+            };
+            mediaLightbox.show(mediaItem, virtualMsg, (chatId, msgId) => {
+              setTimeout(() => this.scrollToMessage(msgId), 50);
+            });
+          });
+        }
+        el.querySelector('.wa-embed-wb-edit-badge')?.addEventListener('click', (e) => {
+          if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) return;
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('wa:edit-whiteboard', {
+            detail: { msg, mediaItem, inlineMediaId: mediaId }
+          }));
+        });
+      } else if (kind === 'audio') {
+        const card = audioManager.createVoiceNoteCard(mediaItem, url);
+        el.innerHTML = '';
+        el.appendChild(card);
+      } else {
+        const sizeStr = mediaItem.size ? db.formatBytes(mediaItem.size) : '';
+        el.innerHTML = `
+          <a href="${url}" download="${this.escapeHtml(mediaItem.filename || label || 'file')}" class="wa-embed-file-card">
+            <span class="wa-embed-file-icon">${Icons.documentIcon('', 20)}</span>
+            <span class="wa-embed-file-meta">
+              <strong>${this.escapeHtml(mediaItem.filename || label || 'Document')}</strong>
+              ${sizeStr ? `<small>${this.escapeHtml(sizeStr)}</small>` : ''}
+            </span>
+            <span class="wa-embed-file-dl">${Icons.download('', 16)}</span>
+          </a>
+        `;
+        el.querySelector('a')?.addEventListener('click', (e) => {
+          if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) {
+            e.preventDefault();
+            return;
+          }
+          e.stopPropagation();
+        });
+      }
+    }
+    this.scheduleTreeConnectorRedraw();
+  }
+
   async renderMediaCard(msg) {
     let mediaItem = null;
     if (msg.mediaId) {
@@ -1868,10 +2171,24 @@ export class VirtualMessageScroller {
         img.alt = msg.mediaName || (type === 'sticker' ? 'Sticker' : 'Photo');
         img.loading = 'lazy';
         img.className = 'bubble-photo';
+        img.addEventListener('load', () => this.scheduleTreeConnectorRedraw());
         if (type !== 'sticker') {
           img.addEventListener('click', () => this.onMediaClick(mediaItem, msg));
         }
         wrap.appendChild(img);
+        if (msg.isWhiteboard || msg.whiteboardData || mediaItem?.isWhiteboard) {
+          const wbBadge = document.createElement('button');
+          wbBadge.type = 'button';
+          wbBadge.className = 'bubble-wb-edit-pill';
+          wbBadge.innerHTML = `${Icons.whiteboard('', 13)} <span>Edit</span>`;
+          wbBadge.title = 'Edit Whiteboard';
+          wbBadge.addEventListener('click', (e) => {
+            if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) return;
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent('wa:edit-whiteboard', { detail: { msg, mediaItem } }));
+          });
+          wrap.appendChild(wbBadge);
+        }
       } else {
         wrap.className = 'media-image-wrap wa-media-loading-container';
         wrap.dataset.pendingMediaId = String(msg.mediaId || '');
@@ -2631,9 +2948,24 @@ export class VirtualMessageScroller {
     }
     this._applyStructuralDecorations(row, bubble, updatedMsg);
 
+    // 5. Refresh standalone media / whiteboard card if updated in-place
+    if (updatedMsg.mediaId) {
+      const oldMediaWrap = bubble.querySelector('.media-image-wrap, .media-video-wrap');
+      if (oldMediaWrap && updatedMsg.isWhiteboard) {
+        const prevCached = this.mediaCache.get(updatedMsg.mediaId);
+        if (prevCached) {
+          try { URL.revokeObjectURL(prevCached); } catch (_) {}
+          this.mediaCache.delete(updatedMsg.mediaId);
+        }
+        const freshMedia = await this.renderMediaCard(updatedMsg);
+        if (freshMedia) oldMediaWrap.replaceWith(freshMedia);
+      }
+    }
+
     if (wasNearBottom) {
       this.container.scrollTop = this.container.scrollHeight;
     }
+    this.scheduleTreeConnectorRedraw();
   }
 
   /**
@@ -2714,6 +3046,7 @@ export class VirtualMessageScroller {
         this._applyStructuralDecorations(row, bubble, m);
       }
     }
+    this.scheduleTreeConnectorRedraw();
   }
 
   cleanup() {

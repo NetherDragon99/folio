@@ -31,8 +31,8 @@ import { assetUrl } from './config/base-path.js';
 import { backgroundTasks } from './utils/background-tasks.js';
 
 // Application Version Constant
-window.APP_VERSION = '2.3.12';
-window.APP_CACHE_NAME = 'wa-clone-v2.3.12';
+window.APP_VERSION = '2.3.13';
+window.APP_CACHE_NAME = 'wa-clone-v2.3.13';
 
 // Global deferred PWA install prompt holder
 window.deferredInstallPrompt = null;
@@ -169,8 +169,8 @@ class Application {
         if (meta) meta.setAttribute('content', '#0b141a');
       }
 
-      const dbAccent = await db.getSetting('appAccentColor', null);
-      if (dbAccent) applyAppAccent(dbAccent);
+      const dbAccent = await db.getSetting('appAccentColor', localStorage.getItem('wa_app_accent') || '#25d366');
+      if (dbAccent) applyAppAccent(dbAccent, dbTheme === 'light');
 
       const dbBubbleColor = await db.getSetting('defaultBubbleColor', null);
       if (dbBubbleColor || savedBubbleColor) {
@@ -194,6 +194,7 @@ class Application {
       { pattern: '/gallery', viewClass: GalleryView },
       { pattern: '/starred', viewClass: StarredMessagesView },
       { pattern: '/chat/:id/info', viewClass: ContactInfoView },
+      { pattern: '/chat/:id/calls', viewClass: CallsView },
       { pattern: '/chat/:id', viewClass: ChatView },
       { pattern: '/manage-storage/:id', viewClass: ChatStorageView },
       { pattern: '/manage-storage', viewClass: ManageStorageView },

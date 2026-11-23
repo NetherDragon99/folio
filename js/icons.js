@@ -499,5 +499,85 @@ export const Icons = {
   noteMode: (cls = '', size = 20) => `
     <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">
       <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 8h10v2H7V8zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"/>
+    </svg>`,
+
+  /** Whiteboard / drawing canvas icon */
+  whiteboard: (cls = '', size = 22) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+      <line x1="8" y1="21" x2="16" y2="21"/>
+      <line x1="12" y1="17" x2="12" y2="21"/>
+      <path d="M7 12c1.5-2.5 3-2.5 4.5 0s3 2.5 5.5-2"/>
+    </svg>`,
+
+  /** Select messages check-circle icon */
+  selectMessages: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 11l3 3L22 4"/>
+      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+    </svg>`,
+
+  /** Text alignment & direction icons */
+  alignLeft: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M15 15H3v2h12v-2zm0-8H3v2h12V7zM3 13h18v-2H3v2zm0 8h18v-2H3v2zM3 3v2h18V3H3z"/>
+    </svg>`,
+
+  alignCenter: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M7 15v2h10v-2H7zm-4 6h18v-2H3v2zm0-8h18v-2H3v2zm4-6v2h10V7H7zM3 3v2h18V3H3z"/>
+    </svg>`,
+
+  alignRight: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M3 21h18v-2H3v2zm6-4h12v-2H9v2zm-6-4h18v-2H3v2zm6-4h12V7H9v2zM3 3v2h18V3H3z"/>
+    </svg>`,
+
+  textDirLtr: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M9 10v5h2V4h2v11h2V4h2V2H9C6.79 2 5 3.79 5 6s1.79 4 4 4zm12 8l-4-4v3H5v2h12v3l4-4z"/>
+    </svg>`,
+
+  textDirRtl: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M10 10v5h2V4h2v11h2V4h2V2h-8C7.79 2 6 3.79 6 6s1.79 4 4 4zm-2 7v-3l-4 4 4 4v-3h12v-2H8z"/>
+    </svg>`,
+
+  /** Plus circle / Insert inline embed icon */
+  plusBlock: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="4"/>
+      <line x1="12" y1="8" x2="12" y2="16"/>
+      <line x1="8" y1="12" x2="16" y2="12"/>
+    </svg>`,
+
+  /** Enter key icon for Settings */
+  enterKey: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19 7v4H5.83l3.58-3.59L8 6l-6 6 6 6 1.41-1.41L5.83 13H21V7h-2z"/>
+    </svg>`,
+
+  /** Eraser icon for Whiteboard */
+  eraser: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 20H7L3 16c-.8-.8-.8-2 0-2.8l10-10c.8-.8 2-.8 2.8 0l5.4 5.4c.8.8.8 2 0 2.8L13 19.6"/>
+      <path d="M6.5 11.5l6 6"/>
+    </svg>`,
+
+  /** Shapes icon for Whiteboard */
+  shapes: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="13" width="8" height="8" rx="1"/>
+      <circle cx="17" cy="17" r="4"/>
+      <polygon points="12 3 16.5 10 7.5 10"/>
+    </svg>`,
+
+  /** Hand / Pan icon for Whiteboard */
+  handPan: (cls = '', size = 20) => `
+    <svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 11V6a2 2 0 0 0-4 0v4"/>
+      <path d="M14 10V4a2 2 0 0 0-4 0v6"/>
+      <path d="M10 10.5V6a2 2 0 0 0-4 0v8"/>
+      <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.8-5.9-2.2L3.3 17a2 2 0 0 1 2.8-2.8L8 16"/>
     </svg>`
 };

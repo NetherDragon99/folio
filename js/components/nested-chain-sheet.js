@@ -218,6 +218,8 @@ export class NestedChainSheet {
             let flatItems = null;
             let liftState = null;
             let dragRect = null;
+            let baseCardOffset = 50;
+            let floatStartLeft = 0;
             let remainingRows = [];
             let placeholderEl = null;
             let guidesEl = null;
@@ -272,6 +274,7 @@ export class NestedChainSheet {
               const preview = findParentPreviewAtSlot(liftState.remaining, slotIdx, snappedDepthVal);
               const clampedPreviewDepth = Math.min(TREE_MAX_DEPTH, snappedDepthVal);
               placeholderEl.style.setProperty('--tree-depth', String(clampedPreviewDepth));
+              placeholderEl.style.marginLeft = `${baseCardOffset + clampedPreviewDepth * TREE_STEP_PX}px`;
               placeholderEl.classList.toggle('is-unnest-target', preview.action === 'unnest');
               placeholderEl.classList.toggle('is-root-target', preview.action === 'new-root');
 
@@ -306,20 +309,29 @@ export class NestedChainSheet {
               flatItems = flattenNestedTree(topAncestor, curChildrenMap);
               liftState = removeDraggedNodeFromFlatList(flatItems, idStr, TREE_MAX_DEPTH);
               dragRect = row.getBoundingClientRect();
+              const listRect = listEl.getBoundingClientRect();
+              const cardEl = row.querySelector('.nested-tree-card');
+              const baseDInit = liftState.draggedItem?.depth ?? depth;
+              const measuredCardOffset = cardEl
+                ? Math.round(cardEl.getBoundingClientRect().left - listRect.left - baseDInit * TREE_STEP_PX)
+                : 50;
+              baseCardOffset = Math.max(24, Math.min(80, measuredCardOffset));
+              floatStartLeft = dragRect.left + baseDInit * TREE_STEP_PX;
+              const floatWidth = Math.max(160, Math.round(dragRect.width - baseDInit * TREE_STEP_PX));
               currentSlotIndex = liftState.originalIndex >= 0 ? liftState.originalIndex : 0;
 
               listEl.classList.add('is-tree-dragging');
 
-              // Snap rail guide lines across levels 0..MAX_DEPTH
+              // Pixel-exact snap rail guide lines aligned 1:1 to every card's exact left edge (L0..L6)
               guidesEl = document.createElement('div');
               guidesEl.className = 'nested-tree-snap-guides';
               guidesEl.setAttribute('aria-hidden', 'true');
-              const baseOffset = 14;
               for (let col = 0; col <= TREE_MAX_DEPTH; col++) {
                 const rail = document.createElement('span');
                 rail.className = 'nested-tree-snap-rail';
                 rail.dataset.snapCol = String(col);
-                rail.style.left = `${baseOffset + col * TREE_STEP_PX}px`;
+                rail.dataset.colLabel = `L${col}`;
+                rail.style.left = `${baseCardOffset + col * TREE_STEP_PX}px`;
                 guidesEl.appendChild(rail);
               }
               listEl.prepend(guidesEl);
@@ -347,11 +359,11 @@ export class NestedChainSheet {
                 listEl.insertBefore(placeholderEl, remainingRows[currentSlotIndex]);
               }
 
-              // Lift dragged card into floating overlay attached smoothly near pointer
+              // Lift dragged card into floating overlay anchored at its exact visual X (zero left-jump!)
               row.style.position = 'fixed';
-              row.style.left = `${Math.round(dragRect.left)}px`;
+              row.style.left = `${Math.round(floatStartLeft)}px`;
               row.style.top = `${Math.round(dragRect.top - 4)}px`;
-              row.style.width = `${Math.round(dragRect.width)}px`;
+              row.style.width = `${floatWidth}px`;
               row.style.height = `${Math.round(dragRect.height)}px`;
               row.classList.add('is-dragged', 'is-floating-drag');
 
@@ -360,7 +372,7 @@ export class NestedChainSheet {
               row.appendChild(pillEl);
 
               const initRange = getValidDepthRangeAtSlot(liftState.remaining, currentSlotIndex, TREE_MAX_DEPTH);
-              currentSnappedDepth = snapHorizontalDepth(liftState.draggedItem?.depth || depth, 0, TREE_STEP_PX, initRange);
+              currentSnappedDepth = snapHorizontalDepth(baseDInit, 0, TREE_STEP_PX, initRange);
               updateVisualFeedback(currentSlotIndex, currentSnappedDepth);
             };
 
@@ -410,12 +422,12 @@ export class NestedChainSheet {
               const validRange = getValidDepthRangeAtSlot(liftState.remaining, currentSlotIndex, TREE_MAX_DEPTH);
               currentSnappedDepth = snapHorizontalDepth(baseD, dx, TREE_STEP_PX, validRange);
 
-              // Magnetic horizontal snap feel toward discrete level stops
-              const minDx = (validRange.minDepth - baseD) * TREE_STEP_PX - 14;
-              const maxDx = (validRange.maxDepth - baseD) * TREE_STEP_PX + 14;
+              // Exact 1:1 horizontal magnetic snap anchored at floatStartLeft so card aligns directly onto active rail!
+              const minDx = (validRange.minDepth - baseD) * TREE_STEP_PX - 10;
+              const maxDx = (validRange.maxDepth - baseD) * TREE_STEP_PX + 10;
               const boundedDx = Math.max(minDx, Math.min(maxDx, dx));
               const snappedShiftX = (currentSnappedDepth - baseD) * TREE_STEP_PX;
-              const blendedLeft = dragRect.left + boundedDx * 0.45 + snappedShiftX * 0.55;
+              const blendedLeft = floatStartLeft + boundedDx * 0.25 + snappedShiftX * 0.75;
 
               row.style.left = `${Math.round(blendedLeft)}px`;
               row.style.top = `${Math.round(floatTop)}px`;

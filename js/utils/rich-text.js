@@ -230,6 +230,41 @@ function escapeAttr(str) {
 }
 
 /**
+ * Extracts optional leading per-line layout directives:
+ * `{align:left|center|right}`, `{dir:ltr|rtl}`, or combined `{align:center|dir:rtl}`
+ */
+export function extractLineLayoutDirectives(rawLine) {
+  const s = String(rawLine ?? '');
+  const m = s.match(/^\{((?:(?:align:(?:left|center|right)|dir:(?:ltr|rtl))(?:\|)?)+)\}\s?(.*)$/);
+  if (!m) return { align: null, dir: null, content: s };
+  let align = null;
+  let dir = null;
+  for (const part of m[1].split('|')) {
+    if (part.startsWith('align:')) align = part.slice(6);
+    else if (part.startsWith('dir:')) dir = part.slice(4);
+  }
+  return { align, dir, content: m[2] };
+}
+
+export function formatLineLayoutPrefix(align = null, dir = null) {
+  const parts = [];
+  if (align === 'left' || align === 'center' || align === 'right') parts.push(`align:${align}`);
+  if (dir === 'ltr' || dir === 'rtl') parts.push(`dir:${dir}`);
+  return parts.length > 0 ? `{${parts.join('|')}} ` : '';
+}
+
+export function parseEmbedDirective(rawLine) {
+  const m = String(rawLine ?? '').trim().match(/^\[embed:(image|audio|file|whiteboard):([^:\]\n]+?)(?::(full|left|right))?(?:\|([^\]\n]*))?\]$/);
+  if (!m) return null;
+  return {
+    kind: m[1],
+    mediaId: m[2].trim(),
+    layout: m[3] || 'full',
+    label: (m[4] || '').trim()
+  };
+}
+
+/**
  * Render inline rich formatting on an already HTML-escaped single line.
  */
 export function renderInlineFormatting(escapedLine) {
@@ -338,9 +373,31 @@ export function renderRichMessageHtml(text, options = {}) {
   };
 
   for (let i = 0; i < lines.length; i++) {
-    const rawLine = lines[i];
+    const originalLine = lines[i];
 
-    // 0. Collapsible block: [fold:Title] ... [/fold]
+    // 0a. Inline embedded media block: [embed:kind:mediaId:layout|label]
+    const embed = parseEmbedDirective(originalLine);
+    if (embed) {
+      const iconText = embed.kind === 'image' ? '🖼' : (embed.kind === 'audio' ? '🎤' : (embed.kind === 'whiteboard' ? '🎨' : '📎'));
+      const fallbackTitle = embed.label || (embed.kind === 'image' ? 'Photo' : (embed.kind === 'audio' ? 'Voice note' : (embed.kind === 'whiteboard' ? 'Whiteboard' : 'File')));
+      segments.push({
+        type: 'block',
+        html:
+          `<div class="wa-inline-embed wa-embed-${embed.kind} wa-embed-layout-${embed.layout}" ` +
+          `data-embed-kind="${escapeAttr(embed.kind)}" data-embed-media-id="${escapeAttr(embed.mediaId)}" ` +
+          `data-embed-layout="${escapeAttr(embed.layout)}" data-embed-label="${escapeAttr(fallbackTitle)}">` +
+            `<div class="wa-embed-loading">${iconText} <span>${escapeHtml(fallbackTitle)}</span></div>` +
+          `</div>`
+      });
+      continue;
+    }
+
+    const layoutMeta = extractLineLayoutDirectives(originalLine);
+    const rawLine = layoutMeta.content;
+    const alignCls = layoutMeta.align ? ` wa-align-${layoutMeta.align}` : '';
+    const dirAttr = layoutMeta.dir ? ` dir="${layoutMeta.dir}"` : '';
+
+    // 0b. Collapsible block: [fold:Title] ... [/fold]
     const foldMatch = rawLine.match(/^(\s*)\[fold:([^\]\n]+)\](.*)$/);
     if (foldMatch) {
       const title = foldMatch[2].trim();
@@ -353,7 +410,7 @@ export function renderRichMessageHtml(text, options = {}) {
           segments.push({
             type: 'block',
             html:
-              `<details class="wa-fold-block">` +
+              `<details class="wa-fold-block${alignCls}"${dirAttr}>` +
                 `<summary class="wa-fold-summary">` +
                   `<span class="wa-fold-arrow" aria-hidden="true">▶</span>` +
                   `<span class="wa-fold-title" dir="auto">${renderInlineFormatting(escapeHtml(title))}</span>` +
@@ -381,7 +438,7 @@ export function renderRichMessageHtml(text, options = {}) {
       segments.push({
         type: 'block',
         html:
-          `<details class="wa-fold-block">` +
+          `<details class="wa-fold-block${alignCls}"${dirAttr}>` +
             `<summary class="wa-fold-summary">` +
               `<span class="wa-fold-arrow" aria-hidden="true">▶</span>` +
               `<span class="wa-fold-title" dir="auto">${renderInlineFormatting(escapeHtml(title))}</span>` +
@@ -422,7 +479,7 @@ export function renderRichMessageHtml(text, options = {}) {
       segments.push({
         type: 'block',
         html:
-          `<div class="wa-check-row" data-indent="${indent}">` +
+          `<div class="wa-check-row${alignCls}" data-indent="${indent}"${dirAttr}>` +
             `<label class="wa-check-label">` +
               `<input type="checkbox" class="wa-check-input" data-check-idx="${idx}" ${checked ? 'checked' : ''} ${interactive ? '' : 'disabled'} />` +
               `<span class="wa-check-box" aria-hidden="true"></span>` +
@@ -440,7 +497,7 @@ export function renderRichMessageHtml(text, options = {}) {
       const innerHtml = renderInlineFormatting(escapeHtml(headerMatch[2]));
       segments.push({
         type: 'block',
-        html: `<div class="wa-md-h${level}">${innerHtml}</div>`
+        html: `<div class="wa-md-h${level}${alignCls}"${dirAttr}>${innerHtml}</div>`
       });
       continue;
     }
@@ -451,7 +508,7 @@ export function renderRichMessageHtml(text, options = {}) {
       const innerHtml = renderInlineFormatting(escapeHtml(quoteMatch[1]));
       segments.push({
         type: 'block',
-        html: `<blockquote class="wa-md-quote">${innerHtml}</blockquote>`
+        html: `<blockquote class="wa-md-quote${alignCls}"${dirAttr}>${innerHtml}</blockquote>`
       });
       continue;
     }
@@ -466,7 +523,7 @@ export function renderRichMessageHtml(text, options = {}) {
       segments.push({
         type: 'block',
         html:
-          `<div class="wa-list-row wa-list-ul wa-list-shape-${shape}" data-indent="${indent}">` +
+          `<div class="wa-list-row wa-list-ul wa-list-shape-${shape}${alignCls}" data-indent="${indent}"${dirAttr}>` +
             `<span class="wa-list-marker is-${shape}" aria-hidden="true">${glyph}</span>` +
             `<span class="wa-list-content">${innerHtml}</span>` +
           `</div>`
@@ -482,7 +539,7 @@ export function renderRichMessageHtml(text, options = {}) {
       segments.push({
         type: 'block',
         html:
-          `<div class="wa-list-row wa-list-ol" data-indent="${indent}">` +
+          `<div class="wa-list-row wa-list-ol${alignCls}" data-indent="${indent}"${dirAttr}>` +
             `<span class="wa-list-marker">${escapeHtml(olMatch[2])}.</span>` +
             `<span class="wa-list-content">${innerHtml}</span>` +
           `</div>`
@@ -494,7 +551,14 @@ export function renderRichMessageHtml(text, options = {}) {
     let lineHtml = escapeHtml(rawLine);
     lineHtml = lineHtml.replace(/```([^`\n]+?)```/g, '<pre class="chat-code-block"><code>$1</code></pre>');
     lineHtml = renderInlineFormatting(lineHtml);
-    pushTextLine(lineHtml);
+    if (alignCls || dirAttr) {
+      segments.push({
+        type: 'block',
+        html: `<div class="wa-text-para${alignCls}"${dirAttr}>${lineHtml || '<br>'}</div>`
+      });
+    } else {
+      pushTextLine(lineHtml);
+    }
   }
 
   return segments
@@ -509,6 +573,14 @@ export function stripRichMarkup(text) {
   if (!text) return '';
   return String(text)
     .replace(/\r\n?/g, '\n')
+    .replace(/^\{(?:(?:align:(?:left|center|right)|dir:(?:ltr|rtl))(?:\|)?)+\}\s?/gm, '')
+    .replace(/^\[embed:(image|audio|file|whiteboard):[^:\]\n]+?(?::(?:full|left|right))?(?:\|([^\]\n]*))?\]$/gm, (_m, k, lbl) => {
+      if (lbl && lbl.trim()) return `[${lbl.trim()}]`;
+      if (k === 'image') return '[Photo]';
+      if (k === 'audio') return '[Voice note]';
+      if (k === 'whiteboard') return '[Whiteboard]';
+      return '[File]';
+    })
     .replace(/```[^\n]*\n?([\s\S]*?)```/g, '$1')
     .replace(/`([^`\n]+?)`/g, '$1')
     .replace(/\[fold:([^\]\n]+)\]\n?/g, '$1: ')
@@ -548,11 +620,13 @@ export function toggleCheckboxInMarkup(text, checkboxIndex) {
     }
     if (inCodeBlock) continue;
 
-    const match = line.match(/^(\s*)\[([ xX])\](\s+.*)$/);
+    const layoutMeta = extractLineLayoutDirectives(line);
+    const match = layoutMeta.content.match(/^(\s*)\[([ xX])\](\s+.*)$/);
     if (match) {
       if (seen === checkboxIndex) {
         const nextMark = match[2].toLowerCase() === 'x' ? ' ' : 'x';
-        lines[i] = `${match[1]}[${nextMark}]${match[3]}`;
+        const prefix = formatLineLayoutPrefix(layoutMeta.align, layoutMeta.dir);
+        lines[i] = `${prefix}${match[1]}[${nextMark}]${match[3]}`;
         return lines.join('\n');
       }
       seen++;

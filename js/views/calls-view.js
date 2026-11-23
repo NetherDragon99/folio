@@ -19,6 +19,8 @@ export class CallsView {
     this.isLoadingMore = false;
     this._isRefreshing = false;
     this.lastScrollTop = 0;
+    this.filterChatId = null;
+    this.filterChatName = '';
     this.onScrollBound = this.handleScroll.bind(this);
 
     // Auto-refresh when background calls indexing completes
@@ -27,23 +29,33 @@ export class CallsView {
     backgroundTasks.on('all-tasks-complete', this._onCallsUpdateBound);
   }
 
-  async render(rootEl) {
+  async render(rootEl, params = {}) {
     this.container = rootEl;
+    this.filterChatId = params.id || params.chatId || null;
+    this.filterChatName = '';
     let calls = [];
     try {
-      calls = await db.getCalls();
+      if (this.filterChatId) {
+        const chat = await db.getChat(this.filterChatId);
+        this.filterChatName = chat?.name || 'Chat';
+        calls = await db.getCallsByChat(this.filterChatId);
+      } else {
+        calls = await db.getCalls();
+      }
     } catch (err) {
       console.warn('[CallsView] Failed to fetch calls:', err);
     }
 
     if (!this.container) return;
 
+    const isPerChat = Boolean(this.filterChatId);
     rootEl.innerHTML = `
-      <div class="screen-view calls-screen">
-        <header class="wa-app-bar">
-          <div class="app-title">Calls</div>
+      <div class="screen-view calls-screen ${isPerChat ? 'is-per-chat-calls' : ''}">
+        <header class="wa-app-bar flat-app-bar">
+          ${isPerChat ? `<button type="button" class="app-bar-icon-btn" id="btn-calls-back" aria-label="Go back">${Icons.arrowBack('', 24)}</button>` : ''}
+          <div class="app-title" dir="auto">${isPerChat ? `${this.filterChatName} — Calls` : 'Calls'}</div>
           <div class="app-bar-actions">
-            <button class="app-bar-icon-btn" id="btn-clear-calls" title="Clear call log">
+            <button type="button" class="app-bar-icon-btn" id="btn-clear-calls" title="Clear call log">
               ${Icons.trash('', 20)}
             </button>
           </div>
@@ -53,29 +65,35 @@ export class CallsView {
           <!-- Populated dynamically -->
         </div>
 
-        <!-- Bottom Navigation Bar (Shown when rendered standalone) -->
-        <nav class="wa-bottom-nav">
-          <a href="#/chats" class="nav-tab">
-            <div class="tab-icon-wrap">${Icons.chatsTab('', 22)}</div>
-            <span class="tab-label">Chats</span>
-          </a>
-          <a href="#/calls" class="nav-tab active">
-            <div class="tab-icon-wrap">
-              <span class="tab-pill-indicator"></span>
-              ${Icons.callsTab('', 22)}
-            </div>
-            <span class="tab-label">Calls</span>
-          </a>
-          <a href="#/settings" class="nav-tab">
-            <div class="tab-icon-wrap">
-              ${Icons.settingsTab('', 22)}
-              <span class="nav-update-dot ${window.app?.updateReady ? 'visible' : ''}" aria-hidden="true"></span>
-            </div>
-            <span class="tab-label">Settings</span>
-          </a>
-        </nav>
+        ${isPerChat ? '' : `
+          <!-- Bottom Navigation Bar (Shown when rendered standalone) -->
+          <nav class="wa-bottom-nav">
+            <a href="#/chats" class="nav-tab">
+              <div class="tab-icon-wrap">${Icons.chatsTab('', 22)}</div>
+              <span class="tab-label">Chats</span>
+            </a>
+            <a href="#/calls" class="nav-tab active">
+              <div class="tab-icon-wrap">
+                <span class="tab-pill-indicator"></span>
+                ${Icons.callsTab('', 22)}
+              </div>
+              <span class="tab-label">Calls</span>
+            </a>
+            <a href="#/settings" class="nav-tab">
+              <div class="tab-icon-wrap">
+                ${Icons.settingsTab('', 22)}
+                <span class="nav-update-dot ${window.app?.updateReady ? 'visible' : ''}" aria-hidden="true"></span>
+              </div>
+              <span class="tab-label">Settings</span>
+            </a>
+          </nav>
+        `}
       </div>
     `;
+
+    this.container.querySelector('#btn-calls-back')?.addEventListener('click', () => {
+      this.router.back();
+    });
 
     this.bindEvents(calls);
   }
@@ -84,7 +102,7 @@ export class CallsView {
     if (!this.container || this._isRefreshing) return;
     this._isRefreshing = true;
     try {
-      const calls = await db.getCalls();
+      const calls = this.filterChatId ? await db.getCallsByChat(this.filterChatId) : await db.getCalls();
       this.bindEvents(calls);
     } catch (err) {
       console.warn('[CallsView] Error refreshing calls:', err);
@@ -110,8 +128,10 @@ export class CallsView {
       clearBtn.onclick = async () => {
         if (!this.allCalls || this.allCalls.length === 0) return;
         const confirmed = await showConfirm({
-          title: 'Clear call log?',
-          message: 'Do you want to clear your entire call history?',
+          title: this.filterChatId ? `Clear calls with ${this.filterChatName}?` : 'Clear call log?',
+          message: this.filterChatId
+            ? `Do you want to clear call history for ${this.filterChatName}?`
+            : 'Do you want to clear your entire call history?',
           confirmText: 'Clear',
           cancelText: 'Cancel',
           isDanger: true
@@ -119,7 +139,14 @@ export class CallsView {
         if (confirmed) {
           try {
             const tx = db.db.transaction('calls', 'readwrite');
-            tx.objectStore('calls').clear();
+            const store = tx.objectStore('calls');
+            if (this.filterChatId) {
+              for (const c of this.allCalls) {
+                if (c && c.id !== undefined) store.delete(c.id);
+              }
+            } else {
+              store.clear();
+            }
             tx.oncomplete = () => {
               Toast.show('Call log cleared');
               this.refresh();

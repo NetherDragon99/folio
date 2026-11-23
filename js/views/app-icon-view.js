@@ -208,7 +208,7 @@ export class AppIconView {
 
         <div class="custom-dialog-actions app-icon-modal-actions">
           <button type="button" class="dialog-btn dialog-btn-cancel" id="btn-close-icon-info">Got it</button>
-          <button type="button" class="dialog-btn dialog-btn-confirm" id="btn-modal-open-browser" style="background: var(--app-accent, #25d366); color: #0b141a; font-weight: 600;">
+          <button type="button" class="dialog-btn dialog-btn-confirm" id="btn-modal-open-browser" style="background: var(--app-accent); color: var(--app-accent-fg); font-weight: 600;">
             Open in Browser
           </button>
         </div>
