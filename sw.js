@@ -1,6 +1,6 @@
-// WhatsApp Android Clone Service Worker v2.3.13
-const APP_VERSION = '2.3.13';
-const CACHE_NAME = 'wa-clone-v2.3.13';
+// Folio Service Worker v3.0.0
+const APP_VERSION = '3.0.0';
+const CACHE_NAME = 'folio-v3.0.0';
 
 const APP_SHELL_FILES = [
   './',
@@ -22,6 +22,7 @@ const APP_SHELL_FILES = [
   './js/utils/background-tasks.js',
   './js/utils/chat-reorder-dnd.js',
   './js/utils/date-jump.js',
+  './js/utils/demo-generator.js',
   './js/utils/drawer-resizer.js',
   './js/utils/link-preview.js',
   './js/utils/message-mapper.js',
@@ -87,6 +88,7 @@ const MAIN_ICON_FILES = [
   './assets/icons/icon-maskable-512.png'
 ];
 
+const FOLIO_ICON_SVG_FILES = Array.from({ length: 12 }, (_, i) => `./assets/icons/folio-icon-${i + 1}.svg`);
 const APP_ICON_SVG_FILES = Array.from({ length: 15 }, (_, i) => `./assets/icons/app-icon-${i + 1}.svg`);
 const APP_ICON_PNG_FILES = Array.from({ length: 15 }, (_, i) => `./assets/icons/app-icon-${i + 1}.png`);
 const STICKER_FILES = Array.from({ length: 12 }, (_, i) => `./assets/stickers/sticker-${i + 1}.svg`);
@@ -96,6 +98,7 @@ const VIBRANT_WALLPAPERS = Array.from({ length: 26 }, (_, i) => `./assets/wallpa
 const PRECACHE_ASSETS = [
   ...APP_SHELL_FILES,
   ...MAIN_ICON_FILES,
+  ...FOLIO_ICON_SVG_FILES,
   ...APP_ICON_SVG_FILES,
   ...APP_ICON_PNG_FILES,
   ...STICKER_FILES,

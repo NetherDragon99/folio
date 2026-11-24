@@ -1570,6 +1570,23 @@ export class ChatView {
             Toast.show('Whiteboard updated');
           }
         });
+      },
+      resolveEmbedMedia: async (mediaId) => {
+        if (!mediaId) return null;
+        try {
+          const mediaItem = await db.getMedia(mediaId);
+          if (!mediaItem) return null;
+          const previewUrl = mediaItem.blob ? URL.createObjectURL(mediaItem.blob) : '';
+          const sizeText = mediaItem.size ? db.formatBytes(mediaItem.size) : '';
+          return {
+            previewUrl,
+            label: mediaItem.filename || null,
+            sizeText,
+            isWhiteboard: Boolean(mediaItem.isWhiteboard || mediaItem.whiteboardData)
+          };
+        } catch (_) {
+          return null;
+        }
       }
     });
 
@@ -4623,7 +4640,8 @@ export class ChatView {
             blob: result.blob,
             timestamp: Date.now()
           });
-          this.richComposer.insertEmbed({ kind: 'audio', mediaId, layout: 'full', label });
+          const previewUrl = URL.createObjectURL(blob);
+          this.richComposer.insertEmbed({ kind: 'audio', mediaId, layout: 'full', label, previewUrl });
           Toast.show('Voice note inserted inside text');
         }
       }
@@ -4717,9 +4735,17 @@ export class ChatView {
     });
 
     messagesWrap.classList.add('is-chat-reordering');
+    document.body.classList.add('is-wa-dragging-reorder');
     let latestY = startClientY;
     let active = true;
     let autoScrollRaf = null;
+
+    const blockNativeDrag = (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+    };
+    const onKeyDown = (ev) => {
+      if (ev.key === 'Escape') finishDrag(true);
+    };
 
     const runAutoScroll = () => {
       if (!active) return;
@@ -4783,12 +4809,17 @@ export class ChatView {
       if (!active) return;
       active = false;
       if (autoScrollRaf) cancelAnimationFrame(autoScrollRaf);
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', onUp);
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('pointercancel', onPointerCancel);
       window.removeEventListener('touchmove', handleMove);
       window.removeEventListener('touchend', onUp);
       window.removeEventListener('touchcancel', onCancel);
+      window.removeEventListener('dragstart', blockNativeDrag, true);
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.classList.remove('is-wa-dragging-reorder');
 
       const allRemaining = this.scroller.allMessages.filter((m) => !expandedSet.has(String(m.id)));
       let targetGlobalSlot = allRemaining.length;
@@ -4847,9 +4878,18 @@ export class ChatView {
 
     const onUp = () => finishDrag(false);
     const onCancel = () => finishDrag(true);
+    const onPointerCancel = (ev) => {
+      // Desktop browsers can fire spurious pointercancel during mouse hold; only cancel touch/pen
+      if (ev && ev.pointerType === 'mouse') return;
+      finishDrag(true);
+    };
+    window.addEventListener('dragstart', blockNativeDrag, true);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', onUp);
     window.addEventListener('pointermove', handleMove, { passive: false });
     window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('pointercancel', onPointerCancel);
     window.addEventListener('touchmove', handleMove, { passive: false });
     window.addEventListener('touchend', onUp);
     window.addEventListener('touchcancel', onCancel);

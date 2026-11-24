@@ -9,6 +9,7 @@ import { assetUrl } from '../config/base-path.js';
 import { DrawerResizer } from '../utils/drawer-resizer.js';
 import { backgroundTasks } from '../utils/background-tasks.js';
 import { finalizeParsedMessages } from '../utils/message-mapper.js';
+import { appendFolioShowcaseToChat } from '../utils/demo-generator.js';
 
 export class ImportModal {
   constructor(options = {}) {
@@ -795,9 +796,20 @@ export class ImportModal {
 
       // Save Messages and Chat immediately to IndexedDB
       await db.saveMessages(messages);
+      let allSavedMessages = messages;
+      if (this.isAutoCreatingDemo) {
+        const showcaseMessages = await appendFolioShowcaseToChat({
+          chatId,
+          chatName,
+          baseMessages: messages
+        });
+        if (showcaseMessages.length > 0) {
+          allSavedMessages = [...messages, ...showcaseMessages];
+        }
+      }
       db._callsBackfillChecked = false;
 
-      const lastMsg = messages[messages.length - 1] || null;
+      const lastMsg = allSavedMessages[allSavedMessages.length - 1] || null;
       const finalAvatar = this.pendingOverrideAvatar || this.chatAvatarBlob || null;
       const chatRecord = {
         id: chatId,

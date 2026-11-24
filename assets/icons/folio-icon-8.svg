@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="foliosteel_bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#292e36"/>
+      <stop offset="100%" stop-color="#101318"/>
+    </linearGradient>
+    <linearGradient id="foliosteel_front" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f0f5fa"/>
+      <stop offset="100%" stop-color="#8f9cab"/>
+    </linearGradient>
+    <linearGradient id="foliosteel_back" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c2cdd9"/>
+      <stop offset="100%" stop-color="#6e7a8a"/>
+    </linearGradient>
+    <linearGradient id="foliosteel_metal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#dfe6ef" stop-opacity="0.24"/>
+      <stop offset="35%" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="65%" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#0b0e12" stop-opacity="0.3"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#foliosteel_bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#foliosteel_metal)"/>
+  <rect x="20" y="20" width="472" height="472" rx="108" fill="none" stroke="#9ca8b8" stroke-width="8"/>
+  <path d="M216,154 L334,154 C356,154 374,172 374,194 L374,322 C374,344 356,362 334,362 L198,362 L198,328 L314,328 C331,328 345,314 345,297 L345,154 Z" fill="url(#foliosteel_back)"/>
+  <path d="M351,182 C359,185 363,194 363,205 C363,210 358,213 354,210 C349,205 347,196 347,187 C347,183 349,181 351,182 Z" fill="#ffffff" opacity="0.73"/>
+  <path d="M176,112 L294,112 C316,112 334,130 334,152 L334,274 C334,296 316,314 294,314 L182,314 C174,314 170,320 170,325 C170,331 175,335 182,335 L208,335 L154,390 C145,399 138,394 138,382 L138,150 C138,129 155,112 176,112 Z" fill="url(#foliosteel_front)"/>
+  <path d="M278,132 C296,132 311,146 313,164 C314,172 307,176 300,173 C288,167 277,156 271,144 C268,137 271,132 278,132 Z" fill="#ffffff" opacity="0.85"/>
+</svg>

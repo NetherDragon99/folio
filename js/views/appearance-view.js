@@ -3,7 +3,7 @@ import { Icons } from '../icons.js';
 import { db } from '../db.js';
 import { APP_COLOR_PALETTE, applyAppAccent, applyOutgoingBubbleColor } from '../config/palette.js';
 import { WALLPAPER_PRESETS } from '../config/wallpapers.js';
-import { getAppIcon } from '../config/app-icons.js';
+import { DEFAULT_APP_ICON_ID, getAppIcon } from '../config/app-icons.js';
 import { assetUrl } from '../config/base-path.js';
 import { Toast } from '../components/toast.js';
 
@@ -30,7 +30,7 @@ export class AppearanceView {
     const defaultWp = await db.getSetting('defaultWallpaper', 'default');
     const currentAccent = await db.getSetting('appAccentColor', '#25d366');
     const defaultDimming = await db.getSetting('defaultDimming', 0);
-    const currentAppIconId = await db.getSetting('app_icon_id', 'icon-1');
+    const currentAppIconId = await db.getSetting('app_icon_id', DEFAULT_APP_ICON_ID);
     const currentAppIcon = getAppIcon(currentAppIconId);
 
     // Find thumbnail for default wallpaper
@@ -80,7 +80,7 @@ export class AppearanceView {
             </div>
             <div class="appearance-row-text">
               <div class="appearance-row-title">App icon</div>
-              <div class="appearance-row-subtitle">Choose how WhatsApp looks on your home screen</div>
+              <div class="appearance-row-subtitle">Choose how Folio looks on your home screen</div>
             </div>
             <div class="appearance-row-right">
               <img src="${assetUrl(currentAppIcon.file)}" class="app-icon-mini-thumb" alt="Icon" />

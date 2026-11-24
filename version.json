@@ -1,4 +1,5 @@
 {
-  "version": "2.3.13",
-  "cacheName": "wa-clone-v2.3.13"
+  "version": "3.0.0",
+  "cacheName": "folio-v3.0.0",
+  "notes": "Folio v3.0.0: Complete Folio rebrand & vector wordmark, 12 Folio vector app icons (Classic Emerald default), zero phantom scroll space on nested collapse/delete, desktop mouse drag-to-reorder fix, Word-style WYSIWYG resizable/wrappable inline media embeds (Fit/Fill), and upgraded Folio v3.0.0 demo showcase."
 }

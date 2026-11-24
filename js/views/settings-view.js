@@ -25,7 +25,7 @@ export class SettingsView {
       let enterToSend = localStorage.getItem('wa_enter_to_send') !== 'false';
       let persistenceInfo = { isPersisted: false };
       let backupStatus = { hasBackup: false, lastStats: null };
-      const appVersion = window.APP_VERSION || '2.3.13';
+      const appVersion = window.APP_VERSION || '3.0.0';
       const cacheStatus = window.__waCacheStatus || null;
       const updateState = (window.app && typeof window.app.getUpdateState === 'function')
         ? window.app.getUpdateState()
@@ -298,7 +298,7 @@ export class SettingsView {
 
           <!-- App Version Footer -->
           <div class="settings-footer-version">
-            <span>WhatsApp Clone By Steven</span>
+            <span>Folio By Steven</span>
             <span class="version-number">v${appVersion}</span>
           </div>
         </div>
@@ -525,7 +525,7 @@ export class SettingsView {
         const blob = new Blob([jsonStr], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `whatsapp_backup_${Date.now()}.json`;
+        a.download = `folio_backup_${Date.now()}.json`;
         a.click();
         Toast.show('Backup exported successfully');
       } catch (err) {
@@ -563,7 +563,7 @@ export class SettingsView {
     });
 
     // Check for Updates, Background Download Progress & Restart to Update
-    const appVersion = window.APP_VERSION || '2.3.13';
+    const appVersion = window.APP_VERSION || '3.0.0';
     const updateRow = this.container.querySelector('#row-check-updates');
     const updateSubEl = this.container.querySelector('#settings-update-status-sub');
     const updateReadyCard = this.container.querySelector('#settings-update-ready-card');

@@ -1,7 +1,7 @@
 {
-  "name": "WhatsApp",
-  "short_name": "WhatsApp",
-  "description": "WhatsApp Android Offline Archive Restorer & Viewer",
+  "name": "Folio",
+  "short_name": "Folio",
+  "description": "Folio — Offline Notes, Archive Viewer & Smart Chat Workspace",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

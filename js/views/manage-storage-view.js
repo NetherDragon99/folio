@@ -113,7 +113,7 @@ export class ManageStorageView {
           <div class="storage-overview-card">
             <div class="storage-header-row">
               <div class="storage-total-num">${g.formattedTotal}</div>
-              <div class="storage-total-label">Used by Fake WhatsApp</div>
+              <div class="storage-total-label">Used by Folio</div>
             </div>
 
             <!-- Proportional Bar -->

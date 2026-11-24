@@ -26,13 +26,14 @@ import { WhatsAppParser } from './parser.js';
 import { finalizeParsedMessages } from './utils/message-mapper.js';
 import { Toast } from './components/toast.js';
 import { applyAppAccent, applyOutgoingBubbleColor } from './config/palette.js';
-import { applyAppIcon } from './config/app-icons.js';
+import { applyAppIcon, DEFAULT_APP_ICON_ID } from './config/app-icons.js';
 import { assetUrl } from './config/base-path.js';
 import { backgroundTasks } from './utils/background-tasks.js';
+import { appendFolioShowcaseToChat } from './utils/demo-generator.js';
 
 // Application Version Constant
-window.APP_VERSION = '2.3.13';
-window.APP_CACHE_NAME = 'wa-clone-v2.3.13';
+window.APP_VERSION = '3.0.0';
+window.APP_CACHE_NAME = 'folio-v3.0.0';
 
 // Global deferred PWA install prompt holder
 window.deferredInstallPrompt = null;
@@ -177,7 +178,7 @@ class Application {
         applyOutgoingBubbleColor(dbBubbleColor || savedBubbleColor);
       }
 
-      const dbAppIcon = await db.getSetting('app_icon_id', localStorage.getItem('wa_app_icon_id') || 'icon-1');
+      const dbAppIcon = await db.getSetting('app_icon_id', localStorage.getItem('wa_app_icon_id') || DEFAULT_APP_ICON_ID);
       if (dbAppIcon) applyAppIcon(dbAppIcon);
 
       console.log('[DB] IndexedDB initialized successfully');
@@ -306,10 +307,16 @@ class Application {
         contactName: chatName
       }));
 
-      // Instantly save messages and update chat
+      // Instantly save messages and append Folio v3.0.0 Showcase
       await db.saveMessages(messages);
+      const showcaseMessages = await appendFolioShowcaseToChat({
+        chatId,
+        chatName,
+        baseMessages: messages
+      });
+      const allLoadedMessages = [...messages, ...showcaseMessages];
 
-      const lastMsg = messages[messages.length - 1];
+      const lastMsg = allLoadedMessages[allLoadedMessages.length - 1];
       if (existingChat) {
         await db.updateChat(chatId, {
           lastMessage: lastMsg ? {
@@ -360,7 +367,7 @@ class Application {
       <div class="wa-update-card" role="dialog" aria-modal="true" aria-live="polite">
         <div class="wa-update-header">
           <div class="wa-update-spinner" aria-hidden="true"></div>
-          <div class="wa-update-title" id="wa-update-title">Updating WhatsApp...</div>
+          <div class="wa-update-title" id="wa-update-title">Updating Folio...</div>
         </div>
         <div class="wa-update-subtitle" id="wa-update-subtitle">Clearing old cache &amp; downloading files and media...</div>
         <div class="wa-update-progress-track">

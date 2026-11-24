@@ -591,7 +591,7 @@ export class Router {
 
     const { showConfirm } = await import('./components/custom-dialog.js');
     const confirmed = await showConfirm({
-      title: 'Exit WhatsApp?',
+      title: 'Exit Folio?',
       message: 'Are you sure you want to exit the app?',
       confirmText: 'Exit',
       cancelText: 'Cancel',

@@ -254,14 +254,64 @@ export function formatLineLayoutPrefix(align = null, dir = null) {
 }
 
 export function parseEmbedDirective(rawLine) {
-  const m = String(rawLine ?? '').trim().match(/^\[embed:(image|audio|file|whiteboard):([^:\]\n]+?)(?::(full|left|right))?(?:\|([^\]\n]*))?\]$/);
+  const m = String(rawLine ?? '').trim().match(/^\[embed:(image|audio|file|whiteboard):([^:\]\n]+?)(?::([^|\]\n]*))?(?:\|([^\]\n]*))?\]$/);
   if (!m) return null;
+  let layout = 'full';
+  let widthPct = null;
+  let heightPx = null;
+  let fit = 'cover';
+  const metaRaw = (m[3] || '').trim();
+  if (metaRaw) {
+    for (const token of metaRaw.split(':')) {
+      const t = token.trim().toLowerCase();
+      if (t === 'full' || t === 'left' || t === 'right') {
+        layout = t;
+      } else if (t === 'cover' || t === 'contain') {
+        fit = t;
+      } else if (/^w\d+$/.test(t)) {
+        const v = Number(t.slice(1));
+        if (Number.isFinite(v)) widthPct = Math.max(22, Math.min(88, Math.round(v)));
+      } else if (/^h\d+$/.test(t)) {
+        const v = Number(t.slice(1));
+        if (Number.isFinite(v)) heightPx = Math.max(64, Math.min(460, Math.round(v)));
+      }
+    }
+  }
   return {
     kind: m[1],
     mediaId: m[2].trim(),
-    layout: m[3] || 'full',
+    layout,
+    widthPct,
+    heightPx,
+    fit,
     label: (m[4] || '').trim()
   };
+}
+
+export function formatEmbedDirective({
+  kind = 'file',
+  mediaId = '',
+  layout = 'full',
+  widthPct = null,
+  heightPx = null,
+  fit = 'cover',
+  label = ''
+} = {}) {
+  const safeKind = ['image', 'audio', 'file', 'whiteboard'].includes(kind) ? kind : 'file';
+  const safeLayout = ['full', 'left', 'right'].includes(layout) ? layout : 'full';
+  const parts = [safeLayout];
+  if (safeLayout !== 'full' && widthPct !== null && widthPct !== undefined && Number(widthPct) > 0) {
+    parts.push(`w${Math.max(22, Math.min(88, Math.round(Number(widthPct))))}`);
+  }
+  if (heightPx !== null && heightPx !== undefined && Number(heightPx) > 0) {
+    parts.push(`h${Math.max(64, Math.min(460, Math.round(Number(heightPx))))}`);
+  }
+  if ((safeKind === 'image' || safeKind === 'whiteboard') && fit === 'contain') {
+    parts.push('contain');
+  }
+  const safeLabel = String(label || '').replace(/[\]\r\n]/g, '').trim();
+  const base = `[embed:${safeKind}:${String(mediaId).trim()}:${parts.join(':')}`;
+  return safeLabel ? `${base}|${safeLabel}]` : `${base}]`;
 }
 
 /**
@@ -375,17 +425,27 @@ export function renderRichMessageHtml(text, options = {}) {
   for (let i = 0; i < lines.length; i++) {
     const originalLine = lines[i];
 
-    // 0a. Inline embedded media block: [embed:kind:mediaId:layout|label]
+    // 0a. Inline embedded media block: [embed:kind:mediaId:layout[:w%][:hpx][:fit]|label]
     const embed = parseEmbedDirective(originalLine);
     if (embed) {
       const iconText = embed.kind === 'image' ? '🖼' : (embed.kind === 'audio' ? '🎤' : (embed.kind === 'whiteboard' ? '🎨' : '📎'));
       const fallbackTitle = embed.label || (embed.kind === 'image' ? 'Photo' : (embed.kind === 'audio' ? 'Voice note' : (embed.kind === 'whiteboard' ? 'Whiteboard' : 'File')));
+      const styleParts = [];
+      if (embed.layout !== 'full' && embed.widthPct) {
+        styleParts.push(`--embed-w:${embed.widthPct}%`);
+      }
+      if (embed.heightPx) {
+        styleParts.push(`--embed-h:${embed.heightPx}px`);
+      }
+      const styleAttr = styleParts.length > 0 ? ` style="${styleParts.join(';')}"` : '';
+      const customHCls = embed.heightPx ? ' has-custom-h' : '';
       segments.push({
         type: 'block',
         html:
-          `<div class="wa-inline-embed wa-embed-${embed.kind} wa-embed-layout-${embed.layout}" ` +
+          `<div class="wa-inline-embed wa-embed-${embed.kind} wa-embed-layout-${embed.layout}${customHCls}" ` +
           `data-embed-kind="${escapeAttr(embed.kind)}" data-embed-media-id="${escapeAttr(embed.mediaId)}" ` +
-          `data-embed-layout="${escapeAttr(embed.layout)}" data-embed-label="${escapeAttr(fallbackTitle)}">` +
+          `data-embed-layout="${escapeAttr(embed.layout)}" data-embed-fit="${escapeAttr(embed.fit || 'cover')}" ` +
+          `data-embed-label="${escapeAttr(fallbackTitle)}"${styleAttr}>` +
             `<div class="wa-embed-loading">${iconText} <span>${escapeHtml(fallbackTitle)}</span></div>` +
           `</div>`
       });
@@ -574,7 +634,7 @@ export function stripRichMarkup(text) {
   return String(text)
     .replace(/\r\n?/g, '\n')
     .replace(/^\{(?:(?:align:(?:left|center|right)|dir:(?:ltr|rtl))(?:\|)?)+\}\s?/gm, '')
-    .replace(/^\[embed:(image|audio|file|whiteboard):[^:\]\n]+?(?::(?:full|left|right))?(?:\|([^\]\n]*))?\]$/gm, (_m, k, lbl) => {
+    .replace(/^\[embed:(image|audio|file|whiteboard):[^:\]\n]+?(?::[^|\]\n]*)?(?:\|([^\]\n]*))?\]$/gm, (_m, k, lbl) => {
       if (lbl && lbl.trim()) return `[${lbl.trim()}]`;
       if (k === 'image') return '[Photo]';
       if (k === 'audio') return '[Voice note]';

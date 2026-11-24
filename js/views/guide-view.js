@@ -58,6 +58,28 @@ const APP_FEATURES_SECTIONS = [
     ]
   },
   {
+    id: 'whiteboard-and-embeds',
+    title: 'Infinite Whiteboard & Word-Style Inline Media',
+    keywords: 'whiteboard canvas draw shapes arrows inline embed wrap resize fit fill audio file',
+    icon: Icons.whiteboard('', 20),
+    bullets: [
+      '<strong>Editable Vector Whiteboard:</strong> Open from the Attachment Drawer or composer <code>+</code> button. Draw with 4 brushes (Thin Pen, Felt Tip, Wide Marker, Highlighter), insert 8 geometric shapes/arrows, text, and board-optimized images on a dynamic infinite canvas, and tap <b>Edit</b> anytime to update the same message.',
+      '<strong>Word-Style Inline Media &amp; Wrapping:</strong> Embed photos, whiteboards, voice notes, or files directly inside text. Switch between <b>Full</b>, <b>Left Wrap</b>, and <b>Right Wrap</b>, drag edge/corner handles to resize into any square or rectangle, toggle <b>Fit / Fill</b>, and drag to reposition with real text &amp; element reflow.',
+      '<strong>Unified Media Editor:</strong> Attaching photos, videos, or files carries your active composer draft directly into a full rich caption editor with fullscreen formatting.'
+    ]
+  },
+  {
+    id: 'note-mode-and-reorder',
+    title: 'Note Mode, Drag-to-Reorder & Desktop Shortcuts',
+    keywords: 'note mode full width floating date drag reorder select messages enter send desktop',
+    icon: Icons.noteMode('', 20),
+    bullets: [
+      '<strong>Note Mode (Per-Chat &amp; Global):</strong> Turn any chat into full-width note blocks with per-message dates and a sleek floating date pill that appears only while scrolling.',
+      '<strong>Fluid Drag-to-Reorder Messages:</strong> Enter Selection Mode (via 3-dot menu → <b>Select messages</b> or long-press), select one or more messages, then press and hold (mouse or touch) to lift and reorder them smoothly with connected nested subtrees.',
+      '<strong>Desktop Enter-to-Send:</strong> Press <b>Enter</b> to send and <b>Shift+Enter</b> for a new line (toggleable anytime in Settings → Chats).'
+    ]
+  },
+  {
     id: 'voice-and-tools',
     title: 'Voice Notes, Call Logs & Navigation Tools',
     keywords: 'voice recording pause resume duration waveform call empty parser scroll date jump',

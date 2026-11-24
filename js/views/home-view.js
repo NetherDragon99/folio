@@ -33,7 +33,7 @@ export class HomeView {
       <div class="screen-view home-screen">
         <!-- Default App Bar -->
         <header class="wa-app-bar" id="home-default-bar">
-          <div class="app-title">WhatsApp</div>
+          <div class="app-title folio-brand-title" aria-label="Folio">${Icons.folioWordmark('folio-wordmark-svg', 23)}</div>
           <div class="app-bar-actions">
             <button class="app-bar-icon-btn" id="btn-open-starred" title="Starred messages" aria-label="Starred messages">
               ${Icons.star('', 22)}

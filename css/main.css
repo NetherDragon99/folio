@@ -267,6 +267,23 @@ button,
   letter-spacing: -0.2px;
 }
 
+.app-title.folio-brand-title {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  color: #f3f5f8;
+}
+
+[data-theme="light"] .app-title.folio-brand-title {
+  color: #111b21;
+}
+
+.folio-wordmark-svg {
+  display: block;
+  height: 23px;
+  width: auto;
+}
+
 .center-title {
   flex: 1;
   text-align: center;

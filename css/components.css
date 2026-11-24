@@ -4038,8 +4038,47 @@ input:checked+.switch-slider::before {
 }
 
 .app-icon-tile.selected .app-icon-ring {
-  border-color: #ffffff;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
+  border-color: var(--app-accent);
+  box-shadow: 0 0 0 2px rgba(var(--app-accent-rgb), 0.28);
+}
+
+.app-icon-ring.is-squircle {
+  border-radius: 22px;
+}
+
+.app-icon-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--wa-text-secondary);
+  margin: 18px 6px 12px;
+}
+
+.app-icon-section-title:first-child {
+  margin-top: 4px;
+}
+
+.app-icon-tile {
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-icon-tile-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--wa-text-secondary);
+  text-align: center;
+  line-height: 1.25;
+  max-width: 84px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-icon-tile.selected .app-icon-tile-label {
+  color: var(--app-accent);
+  font-weight: 600;
 }
 
 .app-icon-circle-img {
@@ -4049,6 +4088,10 @@ input:checked+.switch-slider::before {
   object-fit: contain;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   display: block;
+}
+
+.app-icon-circle-img.is-squircle-img {
+  border-radius: 18px;
 }
 
 .app-icon-check-badge {

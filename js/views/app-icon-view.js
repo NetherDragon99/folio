@@ -1,7 +1,7 @@
 // Screen: App Icon Selection View (3-Column Grid matching WhatsApp App Icon Screen)
 import { Icons } from '../icons.js';
 import { db } from '../db.js';
-import { APP_ICONS, getAppIcon, applyAppIcon } from '../config/app-icons.js';
+import { APP_ICONS, DEFAULT_APP_ICON_ID, getAppIcon, applyAppIcon } from '../config/app-icons.js';
 import { assetUrl, getBasePath } from '../config/base-path.js';
 import { Toast } from '../components/toast.js';
 
@@ -9,32 +9,37 @@ export class AppIconView {
   constructor(router) {
     this.router = router;
     this.container = null;
-    this.currentIconId = 'icon-1';
+    this.currentIconId = DEFAULT_APP_ICON_ID;
   }
 
   async render(rootEl, params = {}) {
     this.container = rootEl;
-    this.currentIconId = await db.getSetting('app_icon_id', 'icon-1');
+    this.currentIconId = await db.getSetting('app_icon_id', DEFAULT_APP_ICON_ID);
 
-    const iconsHtml = APP_ICONS.map((icon) => {
+    const renderTile = (icon) => {
       const isSelected = icon.id === this.currentIconId;
+      const isFolio = icon.group === 'folio';
       return `
-        <button type="button" class="app-icon-tile ${isSelected ? 'selected' : ''}" data-id="${icon.id}" aria-label="${icon.name}">
-          <div class="app-icon-ring">
-            <img src="${assetUrl(icon.file)}" alt="${icon.name}" class="app-icon-circle-img" loading="lazy" />
+        <button type="button" class="app-icon-tile ${isSelected ? 'selected' : ''} ${isFolio ? 'is-folio-tile' : ''}" data-id="${icon.id}" aria-label="${icon.name}">
+          <div class="app-icon-ring ${isFolio ? 'is-squircle' : ''}">
+            <img src="${assetUrl(icon.file)}" alt="${icon.name}" class="app-icon-circle-img ${isFolio ? 'is-squircle-img' : ''}" loading="lazy" />
             <div class="app-icon-check-badge">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                 <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
               </svg>
             </div>
           </div>
+          <span class="app-icon-tile-label">${icon.name}</span>
         </button>
       `;
-    }).join('');
+    };
+
+    const folioIconsHtml = APP_ICONS.filter((i) => i.group === 'folio').map(renderTile).join('');
+    const classicIconsHtml = APP_ICONS.filter((i) => i.group !== 'folio').map(renderTile).join('');
 
     rootEl.innerHTML = `
       <div class="screen-view app-icon-screen">
-        <!-- App Bar matching WhatsApp reference -->
+        <!-- App Bar -->
         <header class="wa-app-bar flat-app-bar">
           <button type="button" class="app-bar-icon-btn" id="btn-app-icon-back" aria-label="Go back">
             ${Icons.arrowBack('', 24)}
@@ -45,10 +50,16 @@ export class AppIconView {
           </button>
         </header>
 
-        <!-- Main Body: 3-Column Grid of Icons -->
+        <!-- Main Body: Folio Icons + Classic Legacy Icons -->
         <div class="app-icon-body">
+          <div class="app-icon-section-title">Folio Icons</div>
           <div class="app-icon-grid">
-            ${iconsHtml}
+            ${folioIconsHtml}
+          </div>
+
+          <div class="app-icon-section-title">Classic Icons</div>
+          <div class="app-icon-grid">
+            ${classicIconsHtml}
           </div>
 
           <!-- Bottom Info / Status Bar as agreed in grill-me interview -->
@@ -177,7 +188,7 @@ export class AppIconView {
           <div class="app-icon-step-item">
             <span class="app-icon-step-num">1</span>
             <div class="app-icon-step-text">
-              <strong>Remove Old Shortcut:</strong> Touch and hold the WhatsApp clone icon on your home screen, then tap <strong>Uninstall</strong> or go to the app info to unistall the app.
+              <strong>Remove Old Shortcut:</strong> Touch and hold the Folio icon on your home screen, then tap <strong>Uninstall</strong> or go to the app info to uninstall the app.
             </div>
           </div>
           <div class="app-icon-step-item">

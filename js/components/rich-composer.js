@@ -11,7 +11,8 @@ import {
   sanitizeUrl,
   extractLineLayoutDirectives,
   formatLineLayoutPrefix,
-  parseEmbedDirective
+  parseEmbedDirective,
+  formatEmbedDirective
 } from '../utils/rich-text.js';
 
 export class RichComposer {
@@ -20,7 +21,8 @@ export class RichComposer {
     onSelectionChange = () => {},
     onSubmit = null,
     shouldEnterSend = null,
-    onEditInlineWhiteboard = null
+    onEditInlineWhiteboard = null,
+    resolveEmbedMedia = null
   } = {}) {
     this.el = editorEl;
     this.onChange = onChange;
@@ -28,6 +30,7 @@ export class RichComposer {
     this.onSubmit = onSubmit;
     this.shouldEnterSend = shouldEnterSend;
     this.onEditInlineWhiteboard = onEditInlineWhiteboard;
+    this.resolveEmbedMedia = resolveEmbedMedia;
 
     this._isComposing = false;
     this._suppressInput = false;
@@ -100,11 +103,54 @@ export class RichComposer {
           emb.dataset.embedLayout = nextLayout;
           emb.classList.remove('is-layout-full', 'is-layout-left', 'is-layout-right');
           emb.classList.add(`is-layout-${nextLayout}`);
+          if (nextLayout === 'full') {
+            emb.style.removeProperty('--embed-w');
+          } else {
+            const curW = Number(emb.dataset.embedWidthPct || 46);
+            emb.dataset.embedWidthPct = String(curW);
+            emb.style.setProperty('--embed-w', `${curW}%`);
+          }
           emb.querySelectorAll('.rc-embed-layout-btn').forEach((b) => {
             b.classList.toggle('active', b.dataset.layout === nextLayout);
           });
           this._pushHistory();
           this.onChange(this.getValue());
+        }
+        return;
+      }
+      const embedFitBtn = e.target.closest?.('.rc-embed-fit-btn');
+      if (embedFitBtn && this.el.contains(embedFitBtn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const emb = embedFitBtn.closest('.rc-block[data-block="embed"]');
+        if (emb) {
+          const nextFit = emb.dataset.embedFit === 'contain' ? 'cover' : 'contain';
+          emb.dataset.embedFit = nextFit;
+          emb.classList.toggle('is-fit-contain', nextFit === 'contain');
+          emb.classList.toggle('is-fit-cover', nextFit !== 'contain');
+          embedFitBtn.textContent = nextFit === 'contain' ? 'Fit' : 'Fill';
+          embedFitBtn.title = nextFit === 'contain' ? 'Fit (contain) — click for Fill' : 'Fill (cover) — click for Fit';
+          this._pushHistory();
+          this.onChange(this.getValue());
+        }
+        return;
+      }
+      const embedAudioBtn = e.target.closest?.('.rc-embed-audio-play');
+      if (embedAudioBtn && this.el.contains(embedAudioBtn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const emb = embedAudioBtn.closest('.rc-block[data-block="embed"]');
+        const audioEl = emb?.querySelector('audio');
+        if (audioEl) {
+          if (audioEl.paused) {
+            audioEl.play().catch(() => {});
+            embedAudioBtn.textContent = '❚❚';
+            emb.classList.add('is-audio-playing');
+          } else {
+            audioEl.pause();
+            embedAudioBtn.textContent = '▶';
+            emb.classList.remove('is-audio-playing');
+          }
         }
         return;
       }
@@ -130,6 +176,15 @@ export class RichComposer {
           this.onChange(this.getValue());
           this.onSelectionChange(this.getActiveFormats());
         }
+        return;
+      }
+      // Highlight tapped embed (touch-friendly toolbar + resize handles reveal)
+      const clickedEmbed = e.target.closest?.('.rc-block[data-block="embed"]');
+      this.el.querySelectorAll('.rc-block.is-embed-active').forEach((n) => {
+        if (n !== clickedEmbed) n.classList.remove('is-embed-active');
+      });
+      if (clickedEmbed && this.el.contains(clickedEmbed)) {
+        clickedEmbed.classList.add('is-embed-active');
         return;
       }
       this._saveSelection();
@@ -424,36 +479,106 @@ export class RichComposer {
       const kind = options.kind || 'file';
       const mediaId = String(options.mediaId || '');
       const layout = options.layout || 'full';
+      const fit = options.fit === 'contain' ? 'contain' : 'cover';
+      const widthPct = options.widthPct ? Math.max(22, Math.min(88, Math.round(Number(options.widthPct)))) : null;
+      const heightPx = options.heightPx ? Math.max(64, Math.min(460, Math.round(Number(options.heightPx)))) : null;
       const label = options.label || (kind === 'image' ? 'Photo' : (kind === 'audio' ? 'Voice note' : (kind === 'whiteboard' ? 'Whiteboard' : 'File')));
       const previewUrl = options.previewUrl || this._embedPreviewUrls.get(mediaId) || '';
       if (previewUrl && mediaId) this._embedPreviewUrls.set(mediaId, previewUrl);
 
       const div = document.createElement('div');
-      div.className = `rc-block rc-embed is-layout-${layout}`;
+      div.className = `rc-block rc-embed rc-embed-kind-${kind} is-layout-${layout} is-fit-${fit}${heightPx ? ' has-custom-h' : ''}`;
       div.dataset.block = 'embed';
       div.dataset.embedKind = kind;
       div.dataset.embedMediaId = mediaId;
       div.dataset.embedLayout = layout;
+      div.dataset.embedFit = fit;
       div.dataset.embedLabel = label;
+      if (widthPct) {
+        div.dataset.embedWidthPct = String(widthPct);
+        if (layout !== 'full') div.style.setProperty('--embed-w', `${widthPct}%`);
+      } else if (layout !== 'full') {
+        div.dataset.embedWidthPct = '46';
+        div.style.setProperty('--embed-w', '46%');
+      }
+      if (heightPx) {
+        div.dataset.embedHeightPx = String(heightPx);
+        div.style.setProperty('--embed-h', `${heightPx}px`);
+      }
       div.setAttribute('contenteditable', 'false');
 
-      const thumbHtml = (kind === 'image' || kind === 'whiteboard') && previewUrl
-        ? `<img src="${escapeHtml(previewUrl)}" class="rc-embed-thumb" alt="${escapeHtml(label)}" />`
-        : `<span class="rc-embed-icon">${kind === 'audio' ? '🎤' : (kind === 'whiteboard' ? '🎨' : (kind === 'image' ? '🖼' : '📎'))}</span>`;
+      let stageHtml = '';
+      if (kind === 'image' || kind === 'whiteboard') {
+        stageHtml = previewUrl
+          ? `<img src="${escapeHtml(previewUrl)}" class="rc-embed-media-img" alt="${escapeHtml(label)}" draggable="false" />`
+          : `<div class="rc-embed-placeholder-box"><span class="rc-embed-icon">${kind === 'whiteboard' ? '🎨' : '🖼'}</span><span class="rc-embed-label">${escapeHtml(label)}</span></div>`;
+      } else if (kind === 'audio') {
+        const bars = [35, 65, 90, 50, 80, 100, 45, 72, 88, 60, 40, 75, 55, 85, 48, 66]
+          .map((h) => `<span class="rc-embed-wave-bar" style="height:${h}%"></span>`).join('');
+        stageHtml = `
+          <div class="rc-embed-audio-card">
+            <button type="button" class="rc-embed-audio-play" title="Play / Pause">▶</button>
+            <div class="rc-embed-audio-body">
+              <div class="rc-embed-wave">${bars}</div>
+              <span class="rc-embed-label">${escapeHtml(label)}</span>
+            </div>
+            <audio class="rc-embed-audio-src" src="${escapeHtml(previewUrl)}" preload="metadata" style="display:none;"></audio>
+          </div>`;
+      } else {
+        stageHtml = `
+          <div class="rc-embed-file-card">
+            <span class="rc-embed-file-badge">📎</span>
+            <div class="rc-embed-file-meta">
+              <strong class="rc-embed-label">${escapeHtml(label)}</strong>
+              <small class="rc-embed-file-sub">Embedded file</small>
+            </div>
+          </div>`;
+      }
 
+      const isVisual = kind === 'image' || kind === 'whiteboard';
       div.innerHTML = `
-        <div class="rc-embed-drag-grip" title="Hold & drag to reorder">☰</div>
-        <div class="rc-embed-preview">${thumbHtml}<span class="rc-embed-label">${escapeHtml(label)}</span></div>
-        <div class="rc-embed-controls">
+        <div class="rc-embed-stage">${stageHtml}</div>
+        <div class="rc-embed-toolbar">
+          <span class="rc-embed-drag-grip" title="Hold & drag to move">☰</span>
           <button type="button" class="rc-embed-layout-btn ${layout === 'full' ? 'active' : ''}" data-layout="full" title="Full width">Full</button>
-          <button type="button" class="rc-embed-layout-btn ${layout === 'left' ? 'active' : ''}" data-layout="left" title="Float Left">L</button>
-          <button type="button" class="rc-embed-layout-btn ${layout === 'right' ? 'active' : ''}" data-layout="right" title="Float Right">R</button>
+          <button type="button" class="rc-embed-layout-btn ${layout === 'left' ? 'active' : ''}" data-layout="left" title="Wrap Left">L</button>
+          <button type="button" class="rc-embed-layout-btn ${layout === 'right' ? 'active' : ''}" data-layout="right" title="Wrap Right">R</button>
+          ${isVisual ? `<button type="button" class="rc-embed-fit-btn" title="${fit === 'contain' ? 'Fit (contain) — click for Fill' : 'Fill (cover) — click for Fit'}">${fit === 'contain' ? 'Fit' : 'Fill'}</button>` : ''}
           ${kind === 'whiteboard' ? `<button type="button" class="rc-embed-edit-btn" title="Edit Whiteboard">✎</button>` : ''}
           <button type="button" class="rc-embed-remove-btn" title="Remove">×</button>
         </div>
+        <div class="rc-embed-size-badge" aria-hidden="true"></div>
+        <div class="rc-embed-resize-handle handle-s" data-resize="s" title="Drag to resize height"></div>
+        <div class="rc-embed-resize-handle handle-e" data-resize="e" title="Drag to resize width"></div>
+        <div class="rc-embed-resize-handle handle-w" data-resize="w" title="Drag to resize width"></div>
+        <div class="rc-embed-resize-handle handle-se" data-resize="se" title="Drag to resize"></div>
+        <div class="rc-embed-resize-handle handle-sw" data-resize="sw" title="Drag to resize"></div>
       `;
 
+      const audioTag = div.querySelector('audio');
+      if (audioTag) {
+        audioTag.addEventListener('ended', () => {
+          const btn = div.querySelector('.rc-embed-audio-play');
+          if (btn) btn.textContent = '▶';
+          div.classList.remove('is-audio-playing');
+        });
+      }
+
+      this._attachEmbedResizeHandles(div);
       this._attachEmbedDragReorder(div);
+
+      // Auto-hydrate saved media preview asynchronously (e.g. when editing an existing message or undo/redo)
+      if (!previewUrl && mediaId && typeof this.resolveEmbedMedia === 'function') {
+        Promise.resolve(this.resolveEmbedMedia(mediaId)).then((meta) => {
+          if (!meta || !div.isConnected) return;
+          if (meta.previewUrl) {
+            this.updateEmbedPreview(mediaId, meta.previewUrl, meta.label || null, meta.sizeText || null);
+          } else if (meta.sizeText) {
+            const sub = div.querySelector('.rc-embed-file-sub');
+            if (sub) sub.textContent = meta.sizeText;
+          }
+        }).catch(() => {});
+      }
       return div;
     }
 
@@ -515,6 +640,91 @@ export class RichComposer {
     }
   }
 
+  _attachEmbedResizeHandles(embedEl) {
+    if (!embedEl) return;
+    embedEl.querySelectorAll('.rc-embed-resize-handle').forEach((handle) => {
+      handle.addEventListener('pointerdown', (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const dir = handle.dataset.resize || 's';
+        const layout = embedEl.dataset.embedLayout || 'full';
+        const parentW = Math.max(200, (embedEl.parentNode?.clientWidth || this.el?.clientWidth || 320));
+        const startRect = embedEl.getBoundingClientRect();
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const startW = startRect.width;
+        const startH = startRect.height;
+        const badge = embedEl.querySelector('.rc-embed-size-badge');
+
+        embedEl.classList.add('is-embed-resizing', 'is-embed-active');
+        document.body.classList.add('is-wa-dragging-reorder');
+
+        let latestW = Math.round((startW / parentW) * 100);
+        let latestH = Math.round(startH);
+
+        const updateBadge = () => {
+          if (!badge) return;
+          badge.textContent = layout === 'full' ? `${latestH}px` : `${latestW}% × ${latestH}px`;
+        };
+        updateBadge();
+
+        const onMove = (ev) => {
+          const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
+          const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
+          if (cx === undefined || cy === undefined) return;
+          if (ev.cancelable) ev.preventDefault();
+
+          const dx = cx - startX;
+          const dy = cy - startY;
+
+          // Width resize when in wrap mode (Left or Right)
+          if (layout !== 'full' && (dir.includes('e') || dir.includes('w'))) {
+            const deltaW = dir.includes('e') ? dx : -dx;
+            const nextPxW = Math.max(parentW * 0.22, Math.min(parentW * 0.86, startW + deltaW));
+            latestW = Math.max(22, Math.min(86, Math.round((nextPxW / parentW) * 100)));
+            embedEl.dataset.embedWidthPct = String(latestW);
+            embedEl.style.setProperty('--embed-w', `${latestW}%`);
+          }
+
+          // Height resize in ALL modes (Full, Left, Right)
+          if (dir.includes('s')) {
+            const nextH = Math.max(68, Math.min(460, Math.round(startH + dy)));
+            latestH = nextH;
+            embedEl.dataset.embedHeightPx = String(latestH);
+            embedEl.classList.add('has-custom-h');
+            embedEl.style.setProperty('--embed-h', `${latestH}px`);
+          }
+
+          updateBadge();
+        };
+
+        const finishResize = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', finishResize);
+          window.removeEventListener('pointercancel', finishResize);
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', finishResize);
+          window.removeEventListener('touchmove', onMove);
+          window.removeEventListener('touchend', finishResize);
+          embedEl.classList.remove('is-embed-resizing');
+          document.body.classList.remove('is-wa-dragging-reorder');
+          this._pushHistory();
+          this.onChange(this.getValue());
+        };
+
+        window.addEventListener('pointermove', onMove, { passive: false });
+        window.addEventListener('pointerup', finishResize);
+        window.addEventListener('pointercancel', finishResize);
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', finishResize);
+        window.addEventListener('touchmove', onMove, { passive: false });
+        window.addEventListener('touchend', finishResize);
+      });
+    });
+  }
+
   _attachEmbedDragReorder(embedEl) {
     if (!embedEl) return;
     let holdTimer = null;
@@ -530,17 +740,22 @@ export class RichComposer {
 
     const flipMovePlaceholder = (nextSlot, parentContainer) => {
       if (!placeholder || !parentContainer) return;
-      const beforeTops = siblingBlocks.map((b) => b.getBoundingClientRect().top);
+      const beforeRects = siblingBlocks.map((b) => {
+        const r = b.getBoundingClientRect();
+        return { top: r.top, left: r.left };
+      });
       if (nextSlot >= siblingBlocks.length) {
         parentContainer.appendChild(placeholder);
       } else {
         parentContainer.insertBefore(placeholder, siblingBlocks[nextSlot]);
       }
       siblingBlocks.forEach((b, idx) => {
-        const delta = beforeTops[idx] - b.getBoundingClientRect().top;
-        if (Math.abs(delta) > 0.5) {
+        const after = b.getBoundingClientRect();
+        const dy = beforeRects[idx].top - after.top;
+        const dx = beforeRects[idx].left - after.left;
+        if (Math.abs(dy) > 0.5 || Math.abs(dx) > 0.5) {
           b.style.transition = 'none';
-          b.style.transform = `translateY(${delta}px)`;
+          b.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
           requestAnimationFrame(() => {
             b.style.transition = 'transform 190ms cubic-bezier(0.2, 0.9, 0.3, 1)';
             b.style.transform = '';
@@ -551,7 +766,7 @@ export class RichComposer {
 
     embedEl.addEventListener('pointerdown', (e) => {
       if (e.button !== undefined && e.button !== 0) return;
-      if (e.target.closest('button')) return;
+      if (e.target.closest('button') || e.target.closest('.rc-embed-resize-handle')) return;
       const parentContainer = embedEl.parentNode;
       if (!parentContainer) return;
 
@@ -559,18 +774,27 @@ export class RichComposer {
       startY = e.clientY;
       latestClientY = startY;
       const isGrip = Boolean(e.target.closest('.rc-embed-drag-grip'));
-      const delayMs = isGrip ? 60 : 280;
+      const delayMs = isGrip ? 45 : 260;
+
+      if (isGrip) e.preventDefault();
+
+      const blockDragStart = (ev) => ev.preventDefault();
 
       const startDrag = () => {
+        if (dragging) return;
         dragging = true;
         dragRect = embedEl.getBoundingClientRect();
+        const layout = embedEl.dataset.embedLayout || 'full';
         const allChildren = Array.from(parentContainer.querySelectorAll(':scope > .rc-block'));
         currentSlot = Math.max(0, allChildren.indexOf(embedEl));
         siblingBlocks = allChildren.filter((b) => b !== embedEl);
 
         placeholder = document.createElement('div');
-        placeholder.className = 'rc-embed-drop-gap';
-        placeholder.style.height = `${Math.max(44, Math.round(dragRect.height))}px`;
+        placeholder.className = `rc-embed-drop-gap is-layout-${layout}`;
+        placeholder.style.height = `${Math.max(48, Math.round(dragRect.height))}px`;
+        if (layout !== 'full' && embedEl.dataset.embedWidthPct) {
+          placeholder.style.width = `${embedEl.dataset.embedWidthPct}%`;
+        }
         if (currentSlot >= siblingBlocks.length) {
           parentContainer.appendChild(placeholder);
         } else {
@@ -578,17 +802,19 @@ export class RichComposer {
         }
 
         embedEl.classList.add('is-embed-dragging');
+        document.body.classList.add('is-wa-dragging-reorder');
         embedEl.style.position = 'fixed';
         embedEl.style.left = `${Math.round(dragRect.left)}px`;
         embedEl.style.top = `${Math.round(dragRect.top - 4)}px`;
         embedEl.style.width = `${Math.round(dragRect.width)}px`;
+        embedEl.style.height = `${Math.round(dragRect.height)}px`;
         embedEl.style.zIndex = '1200';
 
         const scrollLoop = () => {
           if (!dragging || !this.el) return;
           const r = this.el.getBoundingClientRect();
-          if (latestClientY < r.top + 36) this.el.scrollTop -= 7;
-          else if (latestClientY > r.bottom - 36) this.el.scrollTop += 7;
+          if (latestClientY < r.top + 36) this.el.scrollTop -= 8;
+          else if (latestClientY > r.bottom - 36) this.el.scrollTop += 8;
           autoScrollRaf = requestAnimationFrame(scrollLoop);
         };
         autoScrollRaf = requestAnimationFrame(scrollLoop);
@@ -597,9 +823,12 @@ export class RichComposer {
       holdTimer = setTimeout(startDrag, delayMs);
 
       const onMove = (ev) => {
-        latestClientY = ev.clientY;
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
+        const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
+        const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
+        if (cx === undefined || cy === undefined) return;
+        latestClientY = cy;
+        const dx = cx - startX;
+        const dy = cy - startY;
         if (!dragging) {
           if (Math.hypot(dx, dy) > 8) {
             clearTimeout(holdTimer);
@@ -609,16 +838,25 @@ export class RichComposer {
           }
           return;
         }
-        ev.preventDefault();
+        if (ev.cancelable) ev.preventDefault();
         const floatTop = dragRect.top + dy - 4;
+        const floatLeft = dragRect.left + dx * 0.35;
         embedEl.style.top = `${Math.round(floatTop)}px`;
-        embedEl.style.left = `${Math.round(dragRect.left + dx * 0.15)}px`;
+        embedEl.style.left = `${Math.round(floatLeft)}px`;
 
         const centerY = floatTop + dragRect.height / 2;
+        const centerX = floatLeft + dragRect.width / 2;
         let nextSlot = siblingBlocks.length;
         for (let i = 0; i < siblingBlocks.length; i++) {
           const r = siblingBlocks[i].getBoundingClientRect();
-          if (centerY < r.top + r.height / 2) {
+          // For side-by-side floated siblings on same horizontal band, also compare X midpoint
+          const sameBand = Math.abs(centerY - (r.top + r.height / 2)) < Math.min(r.height, dragRect.height) * 0.45;
+          if (sameBand && siblingBlocks[i].dataset?.block === 'embed') {
+            if (centerX < r.left + r.width / 2) {
+              nextSlot = i;
+              break;
+            }
+          } else if (centerY < r.top + r.height / 2) {
             nextSlot = i;
             break;
           }
@@ -634,7 +872,13 @@ export class RichComposer {
         if (autoScrollRaf) { cancelAnimationFrame(autoScrollRaf); autoScrollRaf = null; }
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
-        window.removeEventListener('pointercancel', onCancel);
+        window.removeEventListener('pointercancel', onPointerCancel);
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        window.removeEventListener('touchmove', onMove);
+        window.removeEventListener('touchend', onUp);
+        window.removeEventListener('dragstart', blockDragStart, true);
+        document.body.classList.remove('is-wa-dragging-reorder');
 
         if (!dragging) return;
         dragging = false;
@@ -646,6 +890,7 @@ export class RichComposer {
           embedEl.style.left = '';
           embedEl.style.top = '';
           embedEl.style.width = '';
+          embedEl.style.height = '';
           embedEl.style.zIndex = '';
           embedEl.style.transition = '';
           siblingBlocks.forEach((b) => { b.style.transition = ''; b.style.transform = ''; });
@@ -675,10 +920,18 @@ export class RichComposer {
       };
 
       const onUp = () => cleanup(false);
-      const onCancel = () => cleanup(true);
+      const onPointerCancel = (ev) => {
+        if (ev && ev.pointerType === 'mouse') return;
+        cleanup(true);
+      };
+      window.addEventListener('dragstart', blockDragStart, true);
       window.addEventListener('pointermove', onMove, { passive: false });
       window.addEventListener('pointerup', onUp);
-      window.addEventListener('pointercancel', onCancel);
+      window.addEventListener('pointercancel', onPointerCancel);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      window.addEventListener('touchmove', onMove, { passive: false });
+      window.addEventListener('touchend', onUp);
     });
   }
 
@@ -763,9 +1016,12 @@ export class RichComposer {
         const kind = node.dataset?.embedKind || 'file';
         const mediaId = node.dataset?.embedMediaId || '';
         const layout = node.dataset?.embedLayout || 'full';
+        const widthPct = node.dataset?.embedWidthPct ? Number(node.dataset.embedWidthPct) : null;
+        const heightPx = node.dataset?.embedHeightPx ? Number(node.dataset.embedHeightPx) : null;
+        const fit = node.dataset?.embedFit || 'cover';
         const label = (node.dataset?.embedLabel || '').replace(/[\]\r\n]/g, '').trim();
         if (mediaId) {
-          outLines.push(label ? `[embed:${kind}:${mediaId}:${layout}|${label}]` : `[embed:${kind}:${mediaId}:${layout}]`);
+          outLines.push(formatEmbedDirective({ kind, mediaId, layout, widthPct, heightPx, fit, label }));
         }
         continue;
       }
@@ -2326,18 +2582,36 @@ export class RichComposer {
     return embedEl;
   }
 
-  updateEmbedPreview(mediaId, previewUrl, label = null) {
+  updateEmbedPreview(mediaId, previewUrl, label = null, sizeText = null) {
     if (!mediaId || !this.el) return;
     if (previewUrl) this._embedPreviewUrls.set(String(mediaId), previewUrl);
-    this.el.querySelectorAll(`.rc-block[data-block="embed"][data-embed-media-id="${CSS.escape ? CSS.escape(String(mediaId)) : String(mediaId)}"]`).forEach((emb) => {
+    const escId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(String(mediaId)) : String(mediaId);
+    this.el.querySelectorAll(`.rc-block[data-block="embed"][data-embed-media-id="${escId}"]`).forEach((emb) => {
+      const kind = emb.dataset.embedKind || 'file';
       if (label !== null) {
         emb.dataset.embedLabel = label;
         const lbl = emb.querySelector('.rc-embed-label');
         if (lbl) lbl.textContent = label;
       }
+      if (sizeText) {
+        const sub = emb.querySelector('.rc-embed-file-sub');
+        if (sub) sub.textContent = sizeText;
+      }
       if (previewUrl) {
-        const img = emb.querySelector('.rc-embed-thumb');
-        if (img) img.src = previewUrl;
+        if (kind === 'image' || kind === 'whiteboard') {
+          let img = emb.querySelector('.rc-embed-media-img');
+          if (img) {
+            img.src = previewUrl;
+          } else {
+            const stage = emb.querySelector('.rc-embed-stage');
+            if (stage) {
+              stage.innerHTML = `<img src="${escapeHtml(previewUrl)}" class="rc-embed-media-img" alt="${escapeHtml(emb.dataset.embedLabel || 'Media')}" draggable="false" />`;
+            }
+          }
+        } else if (kind === 'audio') {
+          const audioEl = emb.querySelector('.rc-embed-audio-src');
+          if (audioEl) audioEl.src = previewUrl;
+        }
       }
     });
   }

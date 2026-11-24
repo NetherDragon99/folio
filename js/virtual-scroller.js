@@ -149,6 +149,20 @@ export class VirtualMessageScroller {
     return false;
   }
 
+  _clampScrollAfterLayoutShrink() {
+    if (!this.container) return;
+    const maxTop = Math.max(0, (this.container.scrollHeight || 0) - (this.container.clientHeight || 0));
+    if ((this.container.scrollTop || 0) > maxTop) {
+      this.container.scrollTop = maxTop;
+    }
+    const scrollBtn = document.getElementById('chat-scroll-bottom-btn');
+    if (scrollBtn) {
+      const dist = (this.container.scrollHeight || 0) - (this.container.scrollTop || 0) - (this.container.clientHeight || 0);
+      const isAway = dist > 300 || this.visibleEndIndex < this.allMessages.length;
+      scrollBtn.classList.toggle('visible', isAway);
+    }
+  }
+
   toggleNestedCollapse(parentId) {
     const pid = String(parentId);
     if (this.collapsedNestedParents.has(pid)) {
@@ -177,6 +191,9 @@ export class VirtualMessageScroller {
         }
       }
     }
+    // Synchronously redraw connectors (collapsing old SVG height first) and clamp scroll immediately
+    this.redrawNestedTreeConnectors();
+    this._clampScrollAfterLayoutShrink();
     this.scheduleTreeConnectorRedraw();
   }
 
@@ -194,26 +211,22 @@ export class VirtualMessageScroller {
     let svg = this.container.querySelector(':scope > .chat-nested-tree-svg');
     if (this.nestedChildrenByParentId.size === 0) {
       if (svg) svg.remove();
+      this._clampScrollAfterLayoutShrink();
       return;
     }
 
-    if (!svg) {
-      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svg.setAttribute('class', 'chat-nested-tree-svg');
-      svg.setAttribute('aria-hidden', 'true');
-      this.container.prepend(svg);
+    // CRITICAL: Collapse SVG dimensions BEFORE measuring layout so stale SVG height
+    // can NEVER prop open container.scrollHeight after collapsing or deleting messages!
+    if (svg) {
+      svg.setAttribute('width', '0');
+      svg.setAttribute('height', '0');
+      svg.style.width = '0px';
+      svg.style.height = '0px';
     }
 
     const contRect = this.container.getBoundingClientRect();
     const scrollTop = this.container.scrollTop || 0;
     const scrollLeft = this.container.scrollLeft || 0;
-    const fullW = Math.max(this.container.scrollWidth || 0, Math.round(contRect.width));
-    const fullH = Math.max(this.container.scrollHeight || 0, Math.round(contRect.height));
-
-    svg.setAttribute('width', String(fullW));
-    svg.setAttribute('height', String(fullH));
-    svg.style.width = `${fullW}px`;
-    svg.style.height = `${fullH}px`;
 
     // Build quick lookup of visible row bubbles
     const bubbleMetrics = new Map();
@@ -234,6 +247,8 @@ export class VirtualMessageScroller {
     });
 
     const pathParts = [];
+    let maxPathX = 0;
+    let maxPathY = 0;
     for (const [parentIdStr, children] of this.nestedChildrenByParentId.entries()) {
       if (this.collapsedNestedParents.has(parentIdStr)) continue;
       const pMetric = bubbleMetrics.get(parentIdStr);
@@ -266,17 +281,41 @@ export class VirtualMessageScroller {
             ? cm.left
             : (cm.right <= spineX ? cm.right : (parentSide === 'right' ? cm.right : cm.left))
         );
+        if (spineX > maxPathX) maxPathX = spineX;
+        if (targetX > maxPathX) maxPathX = targetX;
+        if (branchY > maxPathY) maxPathY = branchY;
         pathParts.push(`M ${spineX} ${branchY} L ${targetX} ${branchY}`);
       }
 
       if (maxBranchY > startY) {
+        if (maxBranchY > maxPathY) maxPathY = maxBranchY;
         pathParts.push(`M ${spineX} ${startY} L ${spineX} ${maxBranchY}`);
       }
     }
 
-    svg.innerHTML = pathParts.length > 0
-      ? `<path class="chat-nested-tree-path" d="${pathParts.join(' ')}" />`
-      : '';
+    if (pathParts.length === 0) {
+      if (svg) svg.remove();
+      this._clampScrollAfterLayoutShrink();
+      return;
+    }
+
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'chat-nested-tree-svg');
+      svg.setAttribute('aria-hidden', 'true');
+      this.container.prepend(svg);
+    }
+
+    const realScrollH = this.container.scrollHeight || Math.round(contRect.height);
+    const svgW = Math.max(1, Math.min(Math.round(contRect.width || maxPathX + 12), maxPathX + 12));
+    const svgH = Math.max(1, Math.min(realScrollH, maxPathY + 12));
+
+    svg.setAttribute('width', String(svgW));
+    svg.setAttribute('height', String(svgH));
+    svg.style.width = `${svgW}px`;
+    svg.style.height = `${svgH}px`;
+    svg.innerHTML = `<path class="chat-nested-tree-path" d="${pathParts.join(' ')}" />`;
+    this._clampScrollAfterLayoutShrink();
   }
 
   // Format message time: "7:51 pm"
@@ -733,6 +772,8 @@ export class VirtualMessageScroller {
   attachSwipeAndLongPress(row, msg, onLongPress) {
     let startX = 0;
     let startY = 0;
+    let lastX = 0;
+    let lastY = 0;
     let isPointerDown = false;
     let isSwiping = false;
     let hapticTriggered = false;
@@ -748,11 +789,17 @@ export class VirtualMessageScroller {
 
       startX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
       startY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+      lastX = startX;
+      lastY = startY;
 
       const isSelectedRow = row.classList.contains('is-msg-selected') || row.classList.contains('is-selected');
-      const holdDelay = (this.selectionMode && isSelectedRow && typeof this.onSelectionReorderHold === 'function')
-        ? 320
-        : 450;
+      const isReorderCandidate = Boolean(this.selectionMode && isSelectedRow && typeof this.onSelectionReorderHold === 'function');
+      const holdDelay = isReorderCandidate ? 300 : 450;
+
+      // On desktop mouse hold over a selected message, block native drag/selection so mouse reorder never cancels!
+      if (e.type === 'mousedown' && isReorderCandidate && typeof e.preventDefault === 'function') {
+        e.preventDefault();
+      }
 
       this.activeLongPressTimer = setTimeout(() => {
         if (!isSwiping && isPointerDown) {
@@ -763,7 +810,12 @@ export class VirtualMessageScroller {
             isPointerDown = false;
             window.removeEventListener('mousemove', onWindowMouseMove);
             window.removeEventListener('mouseup', onWindowMouseUp);
-            this.onSelectionReorderHold(msg, row, e);
+            this.onSelectionReorderHold(msg, row, {
+              clientX: lastX,
+              clientY: lastY,
+              type: e.type,
+              pointerType: e.type === 'mousedown' ? 'mouse' : 'touch'
+            });
           } else {
             onLongPress(e);
           }
@@ -787,8 +839,20 @@ export class VirtualMessageScroller {
         return;
       }
 
+      lastX = curX;
+      lastY = curY;
+
       const deltaX = curX - startX;
       const deltaY = curY - startY;
+
+      // In selection mode on a selected row, tolerate small jitter up to 14px before canceling hold, and skip swipe-to-reply
+      const isSelectedRow = row.classList.contains('is-msg-selected') || row.classList.contains('is-selected');
+      if (this.selectionMode && isSelectedRow) {
+        if (Math.hypot(deltaX, deltaY) > 14) {
+          this.cancelPendingLongPress();
+        }
+        return;
+      }
 
       // Vertical movement cancels swipe and long press
       if (!isSwiping && Math.abs(deltaY) > 12) {
@@ -1199,6 +1263,9 @@ export class VirtualMessageScroller {
     }
 
     await this._hydrateReadyPlaceholders();
+    // Synchronously collapse stale SVG height & clamp scroll so deleting messages leaves ZERO empty trailing space
+    this.redrawNestedTreeConnectors();
+    this._clampScrollAfterLayoutShrink();
     this.scheduleTreeConnectorRedraw();
   }
 
@@ -2140,6 +2207,9 @@ export class VirtualMessageScroller {
         });
       }
     }
+    // Synchronously collapse stale SVG height & clamp scroll so deleting messages leaves ZERO empty trailing space
+    this.redrawNestedTreeConnectors();
+    this._clampScrollAfterLayoutShrink();
     this.scheduleTreeConnectorRedraw();
   }
 
@@ -2965,6 +3035,9 @@ export class VirtualMessageScroller {
     if (wasNearBottom) {
       this.container.scrollTop = this.container.scrollHeight;
     }
+    // Synchronously collapse stale SVG height & clamp scroll so deleting messages leaves ZERO empty trailing space
+    this.redrawNestedTreeConnectors();
+    this._clampScrollAfterLayoutShrink();
     this.scheduleTreeConnectorRedraw();
   }
 
@@ -3046,6 +3119,9 @@ export class VirtualMessageScroller {
         this._applyStructuralDecorations(row, bubble, m);
       }
     }
+    // Synchronously collapse stale SVG height & clamp scroll so deleting messages leaves ZERO empty trailing space
+    this.redrawNestedTreeConnectors();
+    this._clampScrollAfterLayoutShrink();
     this.scheduleTreeConnectorRedraw();
   }
 
