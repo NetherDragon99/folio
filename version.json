@@ -1,5 +1,5 @@
 {
-  "version": "3.0.0",
-  "cacheName": "folio-v3.0.0",
-  "notes": "Folio v3.0.0: Complete Folio rebrand & vector wordmark, 12 Folio vector app icons (Classic Emerald default), zero phantom scroll space on nested collapse/delete, desktop mouse drag-to-reorder fix, Word-style WYSIWYG resizable/wrappable inline media embeds (Fit/Fill), and upgraded Folio v3.0.0 demo showcase."
+  "version": "3.0.1",
+  "cacheName": "folio-v3.0.1",
+  "notes": "Folio v3.0.1: Fix external PWA home-screen app icon loading/updating (12 Folio PNG icons + static manifest preservation + cache busting) and hide Install App button reliably whenever Folio is already installed."
 }

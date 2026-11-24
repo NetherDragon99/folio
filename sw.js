@@ -1,6 +1,6 @@
-// Folio Service Worker v3.0.0
-const APP_VERSION = '3.0.0';
-const CACHE_NAME = 'folio-v3.0.0';
+// Folio Service Worker v3.0.1
+const APP_VERSION = '3.0.1';
+const CACHE_NAME = 'folio-v3.0.1';
 
 const APP_SHELL_FILES = [
   './',
@@ -89,6 +89,7 @@ const MAIN_ICON_FILES = [
 ];
 
 const FOLIO_ICON_SVG_FILES = Array.from({ length: 12 }, (_, i) => `./assets/icons/folio-icon-${i + 1}.svg`);
+const FOLIO_ICON_PNG_FILES = Array.from({ length: 12 }, (_, i) => `./assets/icons/folio-icon-${i + 1}.png`);
 const APP_ICON_SVG_FILES = Array.from({ length: 15 }, (_, i) => `./assets/icons/app-icon-${i + 1}.svg`);
 const APP_ICON_PNG_FILES = Array.from({ length: 15 }, (_, i) => `./assets/icons/app-icon-${i + 1}.png`);
 const STICKER_FILES = Array.from({ length: 12 }, (_, i) => `./assets/stickers/sticker-${i + 1}.svg`);
@@ -99,6 +100,7 @@ const PRECACHE_ASSETS = [
   ...APP_SHELL_FILES,
   ...MAIN_ICON_FILES,
   ...FOLIO_ICON_SVG_FILES,
+  ...FOLIO_ICON_PNG_FILES,
   ...APP_ICON_SVG_FILES,
   ...APP_ICON_PNG_FILES,
   ...STICKER_FILES,

@@ -25,7 +25,7 @@ export class SettingsView {
       let enterToSend = localStorage.getItem('wa_enter_to_send') !== 'false';
       let persistenceInfo = { isPersisted: false };
       let backupStatus = { hasBackup: false, lastStats: null };
-      const appVersion = window.APP_VERSION || '3.0.0';
+      const appVersion = window.APP_VERSION || '3.0.1';
       const cacheStatus = window.__waCacheStatus || null;
       const updateState = (window.app && typeof window.app.getUpdateState === 'function')
         ? window.app.getUpdateState()
@@ -50,9 +50,14 @@ export class SettingsView {
         console.warn('[SettingsView] Error loading settings data:', err);
       }
 
-      // Standalone display mode check
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
-        window.navigator.standalone === true;
+      // Smart PWA Install visibility: hidden whenever already installed (standalone/WCO/minimal-ui,
+      // appinstalled, getInstalledRelatedApps, or non-iOS browser with no deferredInstallPrompt)
+      const isStandalone = typeof window.isAppRunningStandalone === 'function'
+        ? window.isAppRunningStandalone()
+        : (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true);
+      const showInstallRow = typeof window.shouldShowPwaInstallButton === 'function'
+        ? window.shouldShowPwaInstallButton()
+        : (!isStandalone && Boolean(window.deferredInstallPrompt));
 
       const avatarHtml = userAvatarBlob
         ? `<img src="${URL.createObjectURL(userAvatarBlob)}" class="profile-avatar-img" alt="Profile" />`
@@ -92,8 +97,8 @@ export class SettingsView {
             </div>
           </div>
 
-          <!-- PWA Native Install Button (Dynamically hidden in standalone mode) -->
-          <div class="settings-pwa-install-row" id="row-pwa-install" style="${isStandalone ? 'display:none;' : ''}">
+          <!-- PWA Native Install Button (Hidden whenever Folio is installed on the device) -->
+          <div class="settings-pwa-install-row" id="row-pwa-install" style="${showInstallRow ? '' : 'display:none;'}">
             <div class="install-icon-wrap">${Icons.installApp('install-icon', 24)}</div>
             <div class="install-texts">
               <div class="install-title">Install App</div>
@@ -385,25 +390,46 @@ export class SettingsView {
       }
     });
 
-    // PWA Native Install Action
+    // PWA Native Install Action + live install-state sync
     const installRow = this.container.querySelector('#row-pwa-install');
     const installBtn = this.container.querySelector('#btn-trigger-pwa-install');
 
-    if (!isStandalone && installBtn) {
+    const syncInstallRowVisibility = () => {
+      if (!installRow) return;
+      const shouldShow = typeof window.shouldShowPwaInstallButton === 'function'
+        ? window.shouldShowPwaInstallButton()
+        : (!isStandalone && Boolean(window.deferredInstallPrompt));
+      installRow.style.display = shouldShow ? '' : 'none';
+    };
+
+    if (installBtn) {
       installBtn.addEventListener('click', async () => {
         if (window.deferredInstallPrompt) {
           window.deferredInstallPrompt.prompt();
           const { outcome } = await window.deferredInstallPrompt.userChoice;
           if (outcome === 'accepted') {
-            Toast.show('Installation accepted!');
-            installRow.style.display = 'none';
+            Toast.show('Installing Folio...');
+            if (installRow) installRow.style.display = 'none';
+            window.__pwaInstalled = true;
+            try { localStorage.setItem('wa_pwa_installed', '1'); } catch (_) {}
           }
           window.deferredInstallPrompt = null;
+          syncInstallRowVisibility();
         } else {
-          Toast.show('Install prompt not available. You can add this page via your browser menu.');
+          const ua = (navigator.userAgent || '').toLowerCase();
+          if (/iphone|ipad|ipod/.test(ua)) {
+            Toast.show('Tap Share ↗ then "Add to Home Screen" to install Folio');
+          } else {
+            Toast.show('Folio is already installed or install via browser menu (⋮)');
+            syncInstallRowVisibility();
+          }
         }
       });
     }
+
+    this._onPwaInstallStateEvent = () => syncInstallRowVisibility();
+    window.addEventListener('wa:pwa-install-state', this._onPwaInstallStateEvent);
+    syncInstallRowVisibility();
 
     // Appearance Navigation
     this.container.querySelector('#row-appearance').addEventListener('click', () => {
@@ -563,7 +589,7 @@ export class SettingsView {
     });
 
     // Check for Updates, Background Download Progress & Restart to Update
-    const appVersion = window.APP_VERSION || '3.0.0';
+    const appVersion = window.APP_VERSION || '3.0.1';
     const updateRow = this.container.querySelector('#row-check-updates');
     const updateSubEl = this.container.querySelector('#settings-update-status-sub');
     const updateReadyCard = this.container.querySelector('#settings-update-ready-card');
@@ -691,6 +717,10 @@ export class SettingsView {
   }
 
   cleanup() {
+    if (this._onPwaInstallStateEvent) {
+      window.removeEventListener('wa:pwa-install-state', this._onPwaInstallStateEvent);
+      this._onPwaInstallStateEvent = null;
+    }
     if (this._onBackupUpdatedEvent) {
       window.removeEventListener('wa:backup-updated', this._onBackupUpdatedEvent);
       this._onBackupUpdatedEvent = null;

@@ -32,16 +32,92 @@ import { backgroundTasks } from './utils/background-tasks.js';
 import { appendFolioShowcaseToChat } from './utils/demo-generator.js';
 
 // Application Version Constant
-window.APP_VERSION = '3.0.0';
-window.APP_CACHE_NAME = 'folio-v3.0.0';
+window.APP_VERSION = '3.0.1';
+window.APP_CACHE_NAME = 'folio-v3.0.1';
 
-// Global deferred PWA install prompt holder
+// Unified PWA Installation Detection & Prompt State
 window.deferredInstallPrompt = null;
+window.__pwaInstalled = false;
+
+window.isAppRunningStandalone = () => {
+  try {
+    if (window.navigator?.standalone === true) return true;
+    if (document.referrer && document.referrer.startsWith('android-app://')) return true;
+    if (typeof window.matchMedia === 'function') {
+      return (
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: minimal-ui)').matches ||
+        window.matchMedia('(display-mode: fullscreen)').matches ||
+        window.matchMedia('(display-mode: window-controls-overlay)').matches
+      );
+    }
+  } catch (_) {}
+  return false;
+};
+
+window.isAppInstalledOnDevice = () => {
+  if (window.isAppRunningStandalone()) return true;
+  if (window.__pwaInstalled) return true;
+  try {
+    if (localStorage.getItem('wa_pwa_installed') === '1') return true;
+  } catch (_) {}
+  return false;
+};
+
+window.shouldShowPwaInstallButton = () => {
+  if (window.isAppInstalledOnDevice()) return false;
+  if (window.deferredInstallPrompt) return true;
+  // iOS Safari never fires beforeinstallprompt — show Add-to-Home-Screen guide only on non-standalone iOS Safari
+  const ua = (navigator.userAgent || '').toLowerCase();
+  const isIosSafari = /iphone|ipad|ipod/.test(ua) && /safari/.test(ua) && !/crios|fxios|edgios/.test(ua);
+  return isIosSafari;
+};
+
+const emitPwaInstallState = () => {
+  window.dispatchEvent(new CustomEvent('wa:pwa-install-state', {
+    detail: {
+      installed: window.isAppInstalledOnDevice(),
+      canInstall: window.shouldShowPwaInstallButton(),
+      hasPrompt: Boolean(window.deferredInstallPrompt)
+    }
+  }));
+};
+
+// If currently launched as an installed PWA, persist installed flag immediately
+if (window.isAppRunningStandalone()) {
+  window.__pwaInstalled = true;
+  try { localStorage.setItem('wa_pwa_installed', '1'); } catch (_) {}
+}
+
+// Browser only fires beforeinstallprompt when the PWA is NOT currently installed
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   window.deferredInstallPrompt = e;
+  window.__pwaInstalled = false;
+  try { localStorage.removeItem('wa_pwa_installed'); } catch (_) {}
   console.log('[PWA] beforeinstallprompt captured and ready');
+  emitPwaInstallState();
 });
+
+window.addEventListener('appinstalled', () => {
+  window.deferredInstallPrompt = null;
+  window.__pwaInstalled = true;
+  try { localStorage.setItem('wa_pwa_installed', '1'); } catch (_) {}
+  console.log('[PWA] Folio installed on device');
+  emitPwaInstallState();
+});
+
+// Check installed related apps on Android Chrome (detects installed PWA even from a browser tab)
+if (typeof navigator !== 'undefined' && typeof navigator.getInstalledRelatedApps === 'function') {
+  navigator.getInstalledRelatedApps().then((apps) => {
+    if (Array.isArray(apps) && apps.length > 0) {
+      window.__pwaInstalled = true;
+      window.deferredInstallPrompt = null;
+      try { localStorage.setItem('wa_pwa_installed', '1'); } catch (_) {}
+      emitPwaInstallState();
+    }
+  }).catch(() => {});
+}
 
 class Application {
   constructor() {
@@ -178,7 +254,17 @@ class Application {
         applyOutgoingBubbleColor(dbBubbleColor || savedBubbleColor);
       }
 
-      const dbAppIcon = await db.getSetting('app_icon_id', localStorage.getItem('wa_app_icon_id') || DEFAULT_APP_ICON_ID);
+      let dbAppIcon = await db.getSetting('app_icon_id', localStorage.getItem('wa_app_icon_id') || DEFAULT_APP_ICON_ID);
+      // One-time v3 rebrand migration: upgrade untouched legacy default 'icon-1' to Folio Classic Emerald
+      try {
+        if (!localStorage.getItem('folio_v3_icon_migrated')) {
+          localStorage.setItem('folio_v3_icon_migrated', '1');
+          if (!dbAppIcon || dbAppIcon === 'icon-1') {
+            dbAppIcon = DEFAULT_APP_ICON_ID;
+            await db.setSetting('app_icon_id', DEFAULT_APP_ICON_ID);
+          }
+        }
+      } catch (_) {}
       if (dbAppIcon) applyAppIcon(dbAppIcon);
 
       console.log('[DB] IndexedDB initialized successfully');
