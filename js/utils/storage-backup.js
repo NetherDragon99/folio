@@ -263,7 +263,7 @@ class StorageBackupManager {
       });
 
       const payload = {
-        version: snapshot.version || '3.0.1',
+        version: snapshot.version || '3.0.2',
         timestamp: snapshot.timestamp || Date.now(),
         chats: snapshot.chats || [],
         messages: compactMessages,
@@ -289,7 +289,7 @@ class StorageBackupManager {
         // Fallback: save at least chats, settings, calls, filters and recent messages
         const recentMessages = (snapshot.messages || []).slice(-300);
         const minimalPayload = {
-          version: snapshot.version || '3.0.1',
+          version: snapshot.version || '3.0.2',
           timestamp: snapshot.timestamp || Date.now(),
           chats: snapshot.chats || [],
           messages: recentMessages,
@@ -369,11 +369,28 @@ class StorageBackupManager {
         }
       });
 
+      // Fetch all media records (native Blobs stored cleanly in Secondary IndexedDB)
+      const media = await new Promise((resolve) => {
+        try {
+          if (!dbInstance.db.objectStoreNames.contains('media')) {
+            resolve([]);
+            return;
+          }
+          const tx = dbInstance.db.transaction('media', 'readonly');
+          const req = tx.objectStore('media').getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => resolve([]);
+        } catch (e) {
+          resolve([]);
+        }
+      });
+
       const snapshot = {
-        version: '3.0.1',
+        version: '3.0.2',
         timestamp: Date.now(),
         chatCount: chats.length,
         messageCount: messages.length,
+        mediaCount: media.length,
         chats,
         messages,
         calls,
@@ -381,8 +398,8 @@ class StorageBackupManager {
         settings
       };
 
-      // 1. Save to Secondary IndexedDB
-      await this.saveToSecondaryIdb(snapshot);
+      // 1. Save to Secondary IndexedDB (includes media blobs)
+      await this.saveToSecondaryIdb({ ...snapshot, media });
 
       // 2. Save to OPFS
       try {
@@ -523,7 +540,10 @@ class StorageBackupManager {
 
     try {
       await dbInstance.init();
-      const tx = dbInstance.db.transaction(['chats', 'messages', 'calls', 'filters', 'settings'], 'readwrite');
+      const hasMedia = Array.isArray(snapshot.media) && snapshot.media.length > 0 && dbInstance.db.objectStoreNames.contains('media');
+      const stores = ['chats', 'messages', 'calls', 'filters', 'settings'];
+      if (hasMedia) stores.push('media');
+      const tx = dbInstance.db.transaction(stores, 'readwrite');
 
       const chatStore = tx.objectStore('chats');
       const msgStore = tx.objectStore('messages');
@@ -546,6 +566,14 @@ class StorageBackupManager {
       // Populate messages
       for (const m of snapshot.messages || []) {
         msgStore.put(m);
+      }
+
+      // Populate media blobs if present in secondary IDB backup
+      if (hasMedia) {
+        const mediaStore = tx.objectStore('media');
+        for (const med of snapshot.media) {
+          if (med && med.id) mediaStore.put(med);
+        }
       }
 
       // Populate calls

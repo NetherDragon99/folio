@@ -775,10 +775,13 @@ export class ChatView {
         } else {
           if (!this.stickerDrawer) {
             this.stickerDrawer = new StickerDrawer({
-              onSelectSticker: (blobOrUrl, name) => {
-                this.sendStickerMessage(blobOrUrl, name);
+              currentChatId: this.chatId,
+              onSelectSticker: (blobOrUrl, name, stickerMeta) => {
+                this.sendStickerMessage(blobOrUrl, name, stickerMeta);
               }
             });
+          } else {
+            this.stickerDrawer.currentChatId = this.chatId;
           }
           this.stickerDrawer.open();
         }
@@ -945,6 +948,8 @@ export class ChatView {
     let manualPillHeightPx = null;
     let isFullscreen = false;
     let isDraggingInput = false;
+    let isEditorFocused = false;
+    let focusOutTimer = null;
 
     const getViewportHeight = () => {
       const vvh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
@@ -967,7 +972,8 @@ export class ChatView {
       const viewportCap = Math.max(oneLineHeight * 2, Math.floor(getViewportHeight() * 0.75) - 48);
       const maxAutoEditorHeight = Math.min(max10LinesHeight, viewportCap);
 
-      // Measure true wrapped content height even while manually resized or in fullscreen
+      // Measure true wrapped content height WITHOUT losing scrollTop when editor is scrolled at max lines!
+      const savedScrollTop = editorEl.scrollTop;
       const prevHeight = editorEl.style.height;
       const prevMinHeight = editorEl.style.minHeight;
       const prevAlignSelf = editorEl.style.alignSelf;
@@ -978,6 +984,7 @@ export class ChatView {
       editorEl.style.height = prevHeight;
       editorEl.style.minHeight = prevMinHeight;
       editorEl.style.alignSelf = prevAlignSelf;
+      editorEl.scrollTop = savedScrollTop;
 
       const clampedEditorHeight = Math.max(
         oneLineHeight,
@@ -1086,22 +1093,25 @@ export class ChatView {
         leftBtn.setAttribute('aria-label', (hasSendableText || this.editingMessage) ? 'Emoji' : 'Stickers');
       }
 
-      // Smooth CSS state class drives icon morph transitions (no abrupt display:none flicker!)
+      // Show drag handle & T button immediately on touch/focus OR while typing/editing; hide on blur only if empty
       const isActivelyTyping = hasRawText || Boolean(this.editingMessage);
+      const shouldShowControls = isEditorFocused || isActivelyTyping || isFullscreen || isDraggingInput;
       if (inputBar) {
         inputBar.classList.toggle('has-typed-text', isActivelyTyping);
+        inputBar.classList.toggle('is-composer-active', shouldShowControls);
       }
       if (inputPill) {
-        inputPill.classList.toggle('is-typing', isActivelyTyping);
+        inputPill.classList.toggle('is-typing', shouldShowControls);
       }
       if (dragHandle) {
-        dragHandle.style.display = (hasRawText || Boolean(this.editingMessage) || isFullscreen || isDraggingInput) ? 'flex' : 'none';
+        dragHandle.style.display = shouldShowControls ? 'flex' : 'none';
       }
 
       if (!hasRawText && !isDraggingInput && !this.editingMessage) {
         manualPillHeightPx = null;
       }
 
+      const prevEditorScrollTop = editorEl.scrollTop;
       const { clampedEditorHeight, needsInternalScroll, naturalPillHeight } = measureNaturalMetrics();
 
       if (isDraggingInput) {
@@ -1115,6 +1125,8 @@ export class ChatView {
         }
         editorEl.style.height = '';
         editorEl.style.overflowY = 'auto';
+        editorEl.scrollTop = prevEditorScrollTop;
+        if (document.activeElement === editorEl) this.richComposer?.scrollCaretIntoView();
         return;
       }
 
@@ -1128,6 +1140,8 @@ export class ChatView {
           }
           editorEl.style.height = '';
           editorEl.style.overflowY = 'auto';
+          editorEl.scrollTop = prevEditorScrollTop;
+          if (document.activeElement === editorEl) this.richComposer?.scrollCaretIntoView();
           return;
         }
       }
@@ -1143,6 +1157,10 @@ export class ChatView {
       } else {
         editorEl.style.height = `${clampedEditorHeight}px`;
         editorEl.style.overflowY = needsInternalScroll ? 'auto' : 'hidden';
+        editorEl.scrollTop = prevEditorScrollTop;
+        if (document.activeElement === editorEl) {
+          this.richComposer?.scrollCaretIntoView();
+        }
       }
     };
 
@@ -1543,6 +1561,7 @@ export class ChatView {
     this.richComposer = new RichComposer(editorEl, {
       onChange: (markup) => {
         updateInputLayout();
+        this._syncEditingMediaChipsFromComposer(markup);
         this._handleComposerLinkDetection(markup);
       },
       onSelectionChange: (activeFormats) => {
@@ -1610,7 +1629,17 @@ export class ChatView {
     window.addEventListener('resize', this._onInputResize);
     window.visualViewport?.addEventListener('resize', this._onInputResize);
 
+    const activateFocusControls = () => {
+      clearTimeout(focusOutTimer);
+      if (!isEditorFocused) {
+        isEditorFocused = true;
+        updateInputLayout();
+      }
+    };
+
+    editorEl.addEventListener('pointerdown', activateFocusControls);
     editorEl.addEventListener('focus', () => {
+      activateFocusControls();
       // Close attachment drawer automatically when user returns focus to text editor (restoring keyboard smoothly!)
       closeAttachDrawer(true);
       this.richComposer?.scrollCaretIntoView();
@@ -1621,6 +1650,22 @@ export class ChatView {
           }
         }, 120);
       }
+    });
+    editorEl.addEventListener('blur', () => {
+      clearTimeout(focusOutTimer);
+      focusOutTimer = setTimeout(() => {
+        if (!editorEl || !document.body.contains(editorEl)) return;
+        const ae = document.activeElement;
+        const insideComposerControls = Boolean(
+          ae &&
+          inputPill?.contains(ae) &&
+          (ae.closest('#chat-input-drag-handle') || ae.closest('#chat-format-toolbar-wrap') || ae === editorEl)
+        );
+        if (!insideComposerControls && !isDraggingInput) {
+          isEditorFocused = false;
+          updateInputLayout();
+        }
+      }, 90);
     });
 
     sendBtn.addEventListener('click', triggerComposerSubmit);
@@ -2397,7 +2442,7 @@ export class ChatView {
     this.scroller.scrollToBottom(true);
   }
 
-  async sendStickerMessage(blobOrUrl, name = 'Sticker') {
+  async sendStickerMessage(blobOrUrl, name = 'Sticker', stickerMeta = null) {
     let blob = blobOrUrl;
     if (typeof blobOrUrl === 'string') {
       try {
@@ -2407,16 +2452,28 @@ export class ChatView {
     }
 
     const mediaId = db.generateUUID();
+    const filename = /\.webp$/i.test(name) ? name : `${name}.webp`;
     const mediaItem = {
       id: mediaId,
       chatId: this.chatId,
-      filename: `${name}.webp`,
+      filename,
       type: 'sticker',
       size: blob?.size || 1024,
       blob: blob,
       timestamp: Date.now()
     };
     await db.saveMedia(mediaItem);
+
+    // Record sticker & chat MRU history for the tabbed Sticker Drawer
+    try {
+      StickerDrawer.recordStickerUsage({
+        id: stickerMeta?.id || mediaId,
+        name: name,
+        url: stickerMeta?.url || (typeof blobOrUrl === 'string' ? blobOrUrl : ''),
+        chatId: stickerMeta?.chatId || this.chatId,
+        isDefault: Boolean(stickerMeta?.isDefault)
+      }, this.chatId);
+    } catch (_) {}
 
     const currentMe = this.chat.meParticipant || this.chat.customMeName || 'Me';
     const newMsg = {
@@ -3031,8 +3088,7 @@ export class ChatView {
           await db.saveMessages(toSave);
         }
 
-        const anchorId = result.newRootId || msg.id;
-        await this.scroller.loadInitial(anchorId);
+        await this.scroller.reloadPreservingScroll();
 
         // Sync chat lastMessage if the latest message in the chat changed after reordering
         const latestMsg = this.scroller.allMessages?.[this.scroller.allMessages.length - 1];
@@ -3352,6 +3408,85 @@ export class ChatView {
     Toast.show('Reply removed');
   }
 
+  _extractEditingMediaItems(msg) {
+    if (!msg) return [];
+    const items = [];
+    const seenKeys = new Set();
+    const row = this.scroller?.findMessageElement?.(msg.id);
+    const albumIds = (row?.classList?.contains('album-msg-row') && row?.dataset?.albumIds)
+      ? row.dataset.albumIds.split(',').filter(Boolean)
+      : [];
+
+    if (albumIds.length > 1 && this.scroller?.allMessages) {
+      for (const sid of albumIds) {
+        const sub = this.scroller.allMessages.find((m) => String(m.id) === String(sid));
+        if (sub && (sub.mediaId || sub.mediaName || sub.mediaType)) {
+          items.push({
+            msgId: sub.id,
+            mediaId: sub.mediaId || null,
+            mediaName: sub.mediaName || sub.mediaType || 'Photo',
+            mediaType: sub.mediaType || 'image',
+            isAlbumMember: true,
+            isInlineEmbed: false
+          });
+          seenKeys.add(`m:${sub.id}`);
+        }
+      }
+    } else if (msg.mediaId || msg.mediaName || msg.mediaType) {
+      items.push({
+        msgId: msg.id,
+        mediaId: msg.mediaId || null,
+        mediaName: msg.mediaName || msg.mediaType || 'Media',
+        mediaType: msg.mediaType || 'document',
+        isAlbumMember: false,
+        isInlineEmbed: false
+      });
+      seenKeys.add(`m:${msg.id}`);
+    }
+
+    // Also include inline embedded media inside msg.text
+    const embedRe = /\[embed:(image|audio|file|whiteboard):([^:\]\s]+):([^\]:]*?)(?::[^\]]*)?\]/g;
+    let match;
+    while ((match = embedRe.exec(msg.text || '')) !== null) {
+      const kind = match[1];
+      const mediaId = match[2];
+      const label = match[3] || kind;
+      if (!seenKeys.has(`e:${mediaId}`)) {
+        seenKeys.add(`e:${mediaId}`);
+        items.push({
+          msgId: msg.id,
+          mediaId,
+          mediaName: label,
+          mediaType: kind,
+          isAlbumMember: false,
+          isInlineEmbed: true
+        });
+      }
+    }
+    return items;
+  }
+
+  _syncEditingMediaChipsFromComposer(markup = '') {
+    if (!this.editingMessage || !Array.isArray(this.editingMediaItems)) return;
+    const inlineIds = new Set();
+    const embedRe = /\[embed:(image|audio|file|whiteboard):([^:\]\s]+):/g;
+    let m;
+    while ((m = embedRe.exec(markup || '')) !== null) {
+      inlineIds.add(String(m[2]));
+    }
+    let changed = false;
+    this.editingMediaItems = this.editingMediaItems.filter((item) => {
+      if (item.isInlineEmbed && !inlineIds.has(String(item.mediaId))) {
+        changed = true;
+        return false;
+      }
+      return true;
+    });
+    if (changed) {
+      this.renderEditBanner();
+    }
+  }
+
   // --- Message Editing via Bottom Composer (Preserves Draft & Reply) ---
   async startEditMessage(msg) {
     this.exitSelectionMode();
@@ -3379,6 +3514,8 @@ export class ChatView {
       String(this.replyingTo.id) !== String(msg.id)
     );
     this.editingMessage = msg;
+    this.editingMediaItems = this._extractEditingMediaItems(msg);
+    this.editingRemovedMediaItems = [];
     this.pendingLinkPreview = msg.linkPreview ? { ...msg.linkPreview } : null;
     this.richComposer.setValue(msg.text || '');
     this._renderComposerLinkPreview();
@@ -3411,23 +3548,97 @@ export class ChatView {
       ? (stripRichMarkup(msg.text) || msg.text)
       : (msg.mediaType ? `[${msg.mediaType}]` : 'Message');
 
-    banner.innerHTML = `
-      <div class="edit-banner-content">
-        <div class="edit-banner-bar"></div>
-        <div class="edit-banner-texts">
-          <div class="edit-banner-title">Edit message</div>
-          <div class="edit-banner-snippet" dir="auto">${this._escHtml(originalPreview)}</div>
+    const mediaItems = this.editingMediaItems || [];
+    const chipsHtml = mediaItems.length > 0
+      ? `
+        <div class="edit-media-chips-row">
+          ${mediaItems.map((item, idx) => {
+            const typeIcon = item.mediaType === 'video' ? '🎬'
+              : (item.mediaType === 'audio' ? '🎤'
+                : (item.mediaType === 'whiteboard' ? '🎨'
+                  : (item.mediaType === 'image' || item.mediaType === 'sticker' ? '🖼' : '📎')));
+            const cachedUrl = item.mediaId ? (this.scroller?.mediaCache?.get(item.mediaId) || '') : '';
+            const isVisual = (item.mediaType === 'image' || item.mediaType === 'sticker' || item.mediaType === 'whiteboard');
+            return `
+              <div class="edit-media-chip" data-edit-media-id="${this._escHtml(String(item.mediaId || item.msgId || idx))}">
+                ${(isVisual && cachedUrl)
+                  ? `<img src="${cachedUrl}" class="edit-media-chip-thumb" alt="" />`
+                  : `<span class="edit-media-chip-icon" data-thumb-media-id="${isVisual && item.mediaId ? this._escHtml(String(item.mediaId)) : ''}">${typeIcon}</span>`}
+                <span class="edit-media-chip-label" dir="auto">${this._escHtml(item.mediaName || item.mediaType || 'Media')}</span>
+                <button type="button" class="edit-media-chip-remove" data-remove-media-idx="${idx}" title="Remove media" aria-label="Remove media">×</button>
+              </div>
+            `;
+          }).join('')}
         </div>
+      `
+      : '';
+
+    banner.innerHTML = `
+      <div class="edit-banner-main-col">
+        <div class="edit-banner-top-row">
+          <div class="edit-banner-content">
+            <div class="edit-banner-bar"></div>
+            <div class="edit-banner-texts">
+              <div class="edit-banner-title">Edit message</div>
+              <div class="edit-banner-snippet" dir="auto">${this._escHtml(originalPreview)}</div>
+            </div>
+          </div>
+          <button type="button" class="edit-banner-close-btn" id="btn-cancel-edit" aria-label="Cancel editing">${Icons.close('', 18)}</button>
+        </div>
+        ${chipsHtml}
       </div>
-      <button type="button" class="edit-banner-close-btn" id="btn-cancel-edit" aria-label="Cancel editing">${Icons.close('', 18)}</button>
     `;
     banner.style.display = 'flex';
     banner.querySelector('#btn-cancel-edit')?.addEventListener('click', () => this.cancelEdit());
+
+    // Async hydrate thumbnail previews on edit chips if not yet in scroller cache
+    banner.querySelectorAll?.('.edit-media-chip-icon[data-thumb-media-id]')?.forEach(async (iconEl) => {
+      const mId = iconEl.dataset.thumbMediaId;
+      if (!mId) return;
+      try {
+        const rec = await db.getMedia(mId);
+        if (rec && rec.blob && iconEl.isConnected) {
+          const url = URL.createObjectURL(rec.blob);
+          this.scroller?.mediaCache?.set(mId, url);
+          const img = document.createElement('img');
+          img.src = url;
+          img.className = 'edit-media-chip-thumb';
+          img.alt = '';
+          iconEl.replaceWith(img);
+        }
+      } catch (_) {}
+    });
+
+    // Bind media chip remove (×) buttons
+    banner.querySelectorAll?.('.edit-media-chip-remove')?.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = Number(btn.dataset.removeMediaIdx);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= this.editingMediaItems.length) return;
+        const [removed] = this.editingMediaItems.splice(idx, 1);
+        if (!this.editingRemovedMediaItems) this.editingRemovedMediaItems = [];
+        this.editingRemovedMediaItems.push(removed);
+
+        if (removed.isInlineEmbed && removed.mediaId && this.richComposer?.el) {
+          const escId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(String(removed.mediaId)) : String(removed.mediaId);
+          this.richComposer.el.querySelectorAll(`.rc-block[data-block="embed"][data-embed-media-id="${escId}"]`).forEach((emb) => {
+            emb.remove();
+          });
+          this.richComposer._ensureAtLeastOneBlock();
+          this.richComposer._pushHistory();
+          this._updateInputLayout?.();
+        }
+        this.renderEditBanner();
+      });
+    });
   }
 
   async cancelEdit(restoreDraft = true) {
     if (!this.editingMessage) return;
     this.editingMessage = null;
+    this.editingMediaItems = [];
+    this.editingRemovedMediaItems = [];
     this.renderEditBanner();
 
     const saved = this._draftBeforeEdit;
@@ -3457,9 +3668,30 @@ export class ChatView {
     if (!msg) return;
 
     const nextText = (rawText || '').trim();
-    const hasMedia = Boolean(msg.mediaId || msg.mediaType);
-    if (!nextText && !hasMedia) {
-      Toast.show('Message cannot be empty');
+    const remainingNonInline = (this.editingMediaItems || []).filter((it) => !it.isInlineEmbed);
+    const removedNonInline = (this.editingRemovedMediaItems || []).filter((it) => !it.isInlineEmbed);
+    const hasInlineEmbedInText = /\[embed:(?:image|audio|file|whiteboard):[^\]]+\]/i.test(nextText);
+    const hasAnyMediaRemaining = remainingNonInline.length > 0 || hasInlineEmbedInText;
+
+    // Auto-delete if user removed all media and left no text
+    if (!nextText && !hasAnyMediaRemaining) {
+      const idsToDelete = new Set([String(msg.id)]);
+      for (const r of removedNonInline) {
+        if (r.msgId) idsToDelete.add(String(r.msgId));
+      }
+      for (const id of idsToDelete) {
+        const target = this.scroller?.allMessages?.find((m) => String(m.id) === id);
+        await db.deleteMessage(target ? target.id : id);
+      }
+      await this.scroller?.removeMessagesInPlace(Array.from(idsToDelete));
+      const allMsgs = this.scroller?.allMessages || [];
+      const lastM = allMsgs.length > 0 ? allMsgs[allMsgs.length - 1] : null;
+      await db.updateChat(this.chatId, {
+        lastMessage: lastM ? (stripRichMarkup(lastM.text || '') || (lastM.mediaType ? `[${lastM.mediaType}]` : '')) : null,
+        updatedAt: Date.now()
+      });
+      Toast.show('Message deleted');
+      await this.cancelEdit(true);
       return;
     }
 
@@ -3473,31 +3705,68 @@ export class ChatView {
     const textChanged = nextText !== (msg.text || '');
     const replyChanged = prevReplyJson !== nextReplyJson;
     const previewChanged = prevPreviewJson !== nextPreviewJson;
+    const mediaRemoved = (this.editingRemovedMediaItems || []).length > 0;
 
-    if (!textChanged && !replyChanged && !previewChanged) {
+    if (!textChanged && !replyChanged && !previewChanged && !mediaRemoved) {
       await this.cancelEdit(true);
       return;
     }
 
+    // Handle removed album sub-messages vs single message attachment removal
+    const removedAlbumItems = removedNonInline.filter((r) => r.isAlbumMember);
+    let survivingPrimary = msg;
+    let deletedAlbumIds = [];
+
+    if (removedAlbumItems.length > 0) {
+      const primaryRemoved = removedAlbumItems.some((r) => String(r.msgId) === String(msg.id));
+      for (const r of removedAlbumItems) {
+        if (String(r.msgId) !== String(msg.id) || (primaryRemoved && remainingNonInline.length > 0)) {
+          await db.deleteMessage(r.msgId);
+          deletedAlbumIds.push(r.msgId);
+        }
+      }
+      if (primaryRemoved && remainingNonInline.length > 0) {
+        const nextPrimaryMeta = remainingNonInline[0];
+        const nextPrimaryObj = this.scroller?.allMessages?.find((m) => String(m.id) === String(nextPrimaryMeta.msgId));
+        if (nextPrimaryObj) survivingPrimary = nextPrimaryObj;
+      }
+    }
+
+    const singleMediaCleared = removedNonInline.length > 0 && remainingNonInline.length === 0;
     const updates = {
       text: nextText,
       replyTo: nextReplyTo,
       linkPreview: nextLinkPreview,
-      isEdited: Boolean(msg.isEdited || textChanged)
+      isEdited: Boolean(survivingPrimary.isEdited || textChanged || mediaRemoved)
     };
+    if (singleMediaCleared) {
+      updates.mediaId = null;
+      updates.mediaName = null;
+      updates.mediaType = null;
+      updates.mediaWidth = null;
+      updates.mediaHeight = null;
+      updates.isVoiceNote = false;
+      updates.duration = 0;
+      updates.isWhiteboard = false;
+      updates.whiteboardData = null;
+    }
 
-    await db.updateMessage(msg.id, updates);
-    Object.assign(msg, updates);
+    await db.updateMessage(survivingPrimary.id, updates);
+    Object.assign(survivingPrimary, updates);
 
-    await this.scroller?.updateMessageInPlace(msg);
+    if (deletedAlbumIds.length > 0) {
+      await this.scroller?.reloadPreservingScroll();
+    } else {
+      await this.scroller?.updateMessageInPlace(survivingPrimary);
+    }
 
     const allMsgs = this.scroller?.allMessages || [];
-    if (allMsgs.length > 0 && String(allMsgs[allMsgs.length - 1].id) === String(msg.id)) {
-      const previewText = stripRichMarkup(nextText) || (msg.mediaType ? `[${msg.mediaType}]` : '');
+    if (allMsgs.length > 0 && String(allMsgs[allMsgs.length - 1].id) === String(survivingPrimary.id)) {
+      const previewText = stripRichMarkup(nextText) || (survivingPrimary.mediaType ? `[${survivingPrimary.mediaType}]` : '');
       await db.updateChat(this.chatId, { lastMessage: previewText, updatedAt: Date.now() });
     }
 
-    Toast.show(textChanged ? 'Message edited' : (replyChanged ? (nextReplyTo ? 'Reply updated' : 'Reply removed') : 'Preview updated'));
+    Toast.show(mediaRemoved ? 'Media updated' : (textChanged ? 'Message edited' : (replyChanged ? (nextReplyTo ? 'Reply updated' : 'Reply removed') : 'Preview updated')));
     await this.cancelEdit(true);
   }
 
@@ -3620,7 +3889,7 @@ export class ChatView {
     if (count === 1) {
       const msg = selectedMsgs[0];
       const isPinned = this.chatPins.some((p) => String(p.messageId) === String(msg.id));
-      const canEdit = Boolean(!msg.isDeleted && (msg.text || msg.mediaId));
+      const canEdit = Boolean(!msg.isDeleted && (msg.text || msg.mediaId || msg.mediaName || msg.mediaType));
 
       // Single select tools arrangement — core WhatsApp essentials first,
       // advanced tools after in the same bar (overflowing automatically to ⋮ when width is tight):
@@ -4866,10 +5135,8 @@ export class ChatView {
         if (lastM) {
           await db.updateChat(this.chatId, { lastMessage: this._getMessagePreviewText(lastM) });
         }
-        const savedScrollTop = messagesWrap.scrollTop;
         this.exitSelectionMode();
-        await this.scroller.loadInitial(anchorMsg.id);
-        messagesWrap.scrollTop = savedScrollTop;
+        await this.scroller.reloadPreservingScroll();
         Toast.show(expandedSet.size > 1 ? `Reordered ${expandedSet.size} messages` : 'Message reordered');
       } else {
         this.scroller.scheduleTreeConnectorRedraw();

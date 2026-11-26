@@ -1,5 +1,5 @@
 {
-  "version": "3.0.1",
-  "cacheName": "folio-v3.0.1",
-  "notes": "Folio v3.0.1: Fix external PWA home-screen app icon loading/updating (12 Folio PNG icons + static manifest preservation + cache busting) and hide Install App button reliably whenever Folio is already installed."
+  "version": "3.0.2",
+  "cacheName": "folio-v3.0.2",
+  "notes": "Folio v3.0.2: Removable media chips during message edit, full-width landscape Note Mode media, natural-ratio tight inline embeds, non-jumping Nested Tree & Drag Reorder scroll lock, composer max-line scroll preservation & immediate focus controls, persistent media recovery & no stuck spinners, full Rich Composer parity & drag-resize inside MediaEditorModal, and WhatsApp-style tabbed Sticker Drawer."
 }

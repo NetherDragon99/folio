@@ -1035,6 +1035,43 @@ export class VirtualMessageScroller {
     }
   }
 
+  /**
+   * Reload messages from IndexedDB and re-render the current window in-place while
+   * strictly preserving container.scrollTop (zero scroll jump or flash-highlight).
+   */
+  async reloadPreservingScroll() {
+    if (!this.container) return;
+    const savedScrollTop = this.container.scrollTop || 0;
+    const prevWindowCount = Math.max(this.CHUNK_SIZE, (this.visibleEndIndex - this.visibleStartIndex) || this.CHUNK_SIZE);
+    const prevStart = Math.max(0, this.visibleStartIndex || 0);
+
+    this.allMessages = await db.getMessages(this.chatId);
+    this.rebuildMessageIndexes();
+
+    if (this.allMessages.length === 0) {
+      await this.loadInitial();
+      return;
+    }
+
+    this.visibleStartIndex = Math.min(prevStart, Math.max(0, this.allMessages.length - prevWindowCount));
+    this.visibleEndIndex = Math.min(this.allMessages.length, this.visibleStartIndex + prevWindowCount);
+    this._prioritizeCurrentBatchMedia(this.visibleEndIndex - 1, [this.visibleStartIndex, this.visibleEndIndex], 'up');
+
+    await this.renderBatch(this.visibleStartIndex, this.visibleEndIndex, 'replace');
+
+    const clampAndRestore = () => {
+      if (!this.container) return;
+      const maxTop = Math.max(0, (this.container.scrollHeight || 0) - (this.container.clientHeight || 0));
+      this.container.scrollTop = Math.min(savedScrollTop, maxTop);
+      this._clampScrollAfterLayoutShrink();
+    };
+    clampAndRestore();
+    requestAnimationFrame(() => {
+      clampAndRestore();
+      this.redrawNestedTreeConnectors();
+    });
+  }
+
   initScrollListener() {
     this.container.addEventListener('scroll', () => {
       // Scrolling ALWAYS cancels any pending long-press timer
@@ -1438,8 +1475,8 @@ export class VirtualMessageScroller {
     for (let idx = 0; idx < displayCount; idx++) {
       const itemMsg = albumMsgs[idx];
       let mediaItem = null;
-      if (itemMsg.mediaId) {
-        mediaItem = await db.getMedia(itemMsg.mediaId);
+      if (itemMsg.mediaId || itemMsg.mediaName) {
+        mediaItem = await db.resolveMediaForMessage(itemMsg);
       }
 
       let mediaUrl = null;
@@ -1490,10 +1527,11 @@ export class VirtualMessageScroller {
           openStacked();
         });
       } else {
+        const isPending = backgroundTasks.isMediaPending(this.chatId, itemMsg.mediaId, itemMsg.mediaName);
         thumbWrap.innerHTML = `
           <div class="media-placeholder wa-media-loading-container" style="min-height: 80px; width: 100%; height: 100%; border-radius: 0;">
-            <div class="wa-media-loading-badge" style="width: 36px; height: 36px;">
-              ${Icons.spinner('thumb-spinner', 18)}
+            <div class="wa-media-loading-badge" style="width: 36px; height: 36px;" title="${isPending ? 'Loading media...' : 'Media unavailable'}">
+              ${isPending ? Icons.spinner('thumb-spinner', 18) : Icons.gallery('', 18)}
             </div>
           </div>`;
         thumbWrap.addEventListener('click', (e) => {
@@ -2133,7 +2171,13 @@ export class VirtualMessageScroller {
 
       let mediaItem = null;
       try {
-        mediaItem = await db.getMedia(mediaId);
+        mediaItem = await db.resolveMediaForMessage({
+          chatId: msg.chatId,
+          mediaId,
+          mediaName: label,
+          mediaType: kind === 'whiteboard' ? 'image' : kind,
+          timestamp: msg.timestamp
+        });
       } catch (_) {}
 
       if (!mediaItem || !mediaItem.blob) {
@@ -2215,11 +2259,12 @@ export class VirtualMessageScroller {
 
   async renderMediaCard(msg) {
     let mediaItem = null;
-    if (msg.mediaId) {
-      mediaItem = await db.getMedia(msg.mediaId);
+    if (msg.mediaId || msg.mediaName) {
+      mediaItem = await db.resolveMediaForMessage(msg);
     }
 
     const type = msg.mediaType || 'document';
+    const isPending = backgroundTasks.isMediaPending(this.chatId, msg.mediaId, msg.mediaName);
     let mediaUrl = null;
 
     if (mediaItem && mediaItem.blob) {
@@ -2235,13 +2280,27 @@ export class VirtualMessageScroller {
     if (type === 'image' || type === 'sticker') {
       const wrap = document.createElement('div');
       wrap.className = 'media-image-wrap';
+      if (type === 'image' && msg.mediaWidth && msg.mediaHeight) {
+        const isLandscape = msg.mediaWidth > msg.mediaHeight;
+        wrap.classList.toggle('is-landscape-media', isLandscape);
+        wrap.classList.toggle('is-portrait-media', !isLandscape);
+      }
       if (mediaUrl) {
         const img = document.createElement('img');
         img.src = mediaUrl;
         img.alt = msg.mediaName || (type === 'sticker' ? 'Sticker' : 'Photo');
         img.loading = 'lazy';
         img.className = 'bubble-photo';
-        img.addEventListener('load', () => this.scheduleTreeConnectorRedraw());
+        img.addEventListener('load', () => {
+          if (type === 'image' && img.naturalWidth && img.naturalHeight) {
+            msg.mediaWidth = img.naturalWidth;
+            msg.mediaHeight = img.naturalHeight;
+            const isLandscape = img.naturalWidth > img.naturalHeight;
+            wrap.classList.toggle('is-landscape-media', isLandscape);
+            wrap.classList.toggle('is-portrait-media', !isLandscape);
+          }
+          this.scheduleTreeConnectorRedraw();
+        });
         if (type !== 'sticker') {
           img.addEventListener('click', () => this.onMediaClick(mediaItem, msg));
         }
@@ -2264,10 +2323,10 @@ export class VirtualMessageScroller {
         wrap.dataset.pendingMediaId = String(msg.mediaId || '');
         wrap.dataset.msgId = String(msg.id);
         wrap.innerHTML = `
-          <div class="wa-media-loading-badge" title="Loading media in background...">
-            ${Icons.spinner('media-spinner', 24)}
+          <div class="wa-media-loading-badge" title="${isPending ? 'Loading media in background...' : 'Media unavailable'}">
+            ${isPending ? Icons.spinner('media-spinner', 24) : Icons.gallery('', 24)}
           </div>
-          <div class="wa-media-loading-label">${msg.mediaName || (type === 'sticker' ? 'Sticker' : 'Photo')}</div>
+          <div class="wa-media-loading-label">${this.escapeHtml(msg.mediaName || (type === 'sticker' ? 'Sticker' : 'Photo'))}${isPending ? '' : ' (Unavailable)'}</div>
         `;
       }
       return wrap;
@@ -2277,11 +2336,26 @@ export class VirtualMessageScroller {
     if (type === 'video') {
       const wrap = document.createElement('div');
       wrap.className = 'media-video-wrap';
+      if (msg.mediaWidth && msg.mediaHeight) {
+        const isLandscape = msg.mediaWidth > msg.mediaHeight;
+        wrap.classList.toggle('is-landscape-media', isLandscape);
+        wrap.classList.toggle('is-portrait-media', !isLandscape);
+      }
       if (mediaUrl) {
         const vid = document.createElement('video');
         vid.src = mediaUrl;
         vid.preload = 'metadata';
         vid.className = 'bubble-video';
+        vid.addEventListener('loadedmetadata', () => {
+          if (vid.videoWidth && vid.videoHeight) {
+            msg.mediaWidth = vid.videoWidth;
+            msg.mediaHeight = vid.videoHeight;
+            const isLandscape = vid.videoWidth > vid.videoHeight;
+            wrap.classList.toggle('is-landscape-media', isLandscape);
+            wrap.classList.toggle('is-portrait-media', !isLandscape);
+            this.scheduleTreeConnectorRedraw();
+          }
+        });
         wrap.appendChild(vid);
         const playOverlay = document.createElement('div');
         playOverlay.className = 'video-play-overlay';
@@ -2293,10 +2367,10 @@ export class VirtualMessageScroller {
         wrap.dataset.pendingMediaId = String(msg.mediaId || '');
         wrap.dataset.msgId = String(msg.id);
         wrap.innerHTML = `
-          <div class="wa-media-loading-badge" title="Loading video in background...">
-            ${Icons.spinner('media-spinner', 24)}
+          <div class="wa-media-loading-badge" title="${isPending ? 'Loading video in background...' : 'Video unavailable'}">
+            ${isPending ? Icons.spinner('media-spinner', 24) : Icons.callVideo('', 24)}
           </div>
-          <div class="wa-media-loading-label">${msg.mediaName || 'Video'}</div>
+          <div class="wa-media-loading-label">${this.escapeHtml(msg.mediaName || 'Video')}${isPending ? '' : ' (Unavailable)'}</div>
         `;
       }
       return wrap;
@@ -2320,12 +2394,12 @@ export class VirtualMessageScroller {
         audioHolder.dataset.msgId = String(msg.id);
         audioHolder.style.cssText = 'display:flex; align-items:center; padding:10px 14px; gap:12px; border-radius:8px; background:rgba(0,0,0,0.18); min-width:180px;';
         audioHolder.innerHTML = `
-          <div class="wa-media-loading-badge" style="width: 38px; height: 38px; min-width: 38px;" title="Processing voice note...">
-            ${Icons.spinner('media-spinner', 20)}
+          <div class="wa-media-loading-badge" style="width: 38px; height: 38px; min-width: 38px;" title="${isPending ? 'Processing voice note...' : 'Audio unavailable'}">
+            ${isPending ? Icons.spinner('media-spinner', 20) : Icons.mic('', 20)}
           </div>
           <div style="display:flex; flex-direction:column; overflow:hidden;">
             <span style="font-size:13px; font-weight:500;">Voice note</span>
-            <span style="font-size:11px; opacity:0.75;">${msg.duration ? Math.round(msg.duration) + 's • ' : ''}Loading audio...</span>
+            <span style="font-size:11px; opacity:0.75;">${msg.duration ? Math.round(msg.duration) + 's • ' : ''}${isPending ? 'Loading audio...' : 'Audio unavailable'}</span>
           </div>
         `;
         return audioHolder;
@@ -2348,8 +2422,8 @@ export class VirtualMessageScroller {
         thumbBox.innerHTML = `<div class="pdf-icon-placeholder">${Icons.pdfIcon('', 44)}</div>`;
       } else {
         thumbBox.innerHTML = `
-          <div class="wa-media-loading-badge" style="width: 38px; height: 38px;">
-            ${Icons.spinner('media-spinner', 20)}
+          <div class="wa-media-loading-badge" style="width: 38px; height: 38px;" title="${isPending ? 'Loading PDF...' : 'PDF unavailable'}">
+            ${isPending ? Icons.spinner('media-spinner', 20) : Icons.pdfIcon('', 26)}
           </div>
         `;
       }
@@ -2364,10 +2438,10 @@ export class VirtualMessageScroller {
       footer.innerHTML = `
         <div class="pdf-meta-left">
           <div class="pdf-filename" title="${msg.mediaName}">${msg.mediaName || 'Document.pdf'}</div>
-          <div class="pdf-submeta">${mediaUrl ? `${pageCountStr}${sizeStr} • PDF` : 'Loading document...'}</div>
+          <div class="pdf-submeta">${mediaUrl ? `${pageCountStr}${sizeStr} • PDF` : (isPending ? 'Loading document...' : 'PDF unavailable')}</div>
         </div>
         <button type="button" class="pdf-download-btn" title="Download Document">
-          ${mediaUrl ? Icons.download('', 18) : Icons.spinner('', 16)}
+          ${mediaUrl ? Icons.download('', 18) : (isPending ? Icons.spinner('', 16) : Icons.pdfIcon('', 16))}
         </button>
       `;
 
@@ -2395,10 +2469,10 @@ export class VirtualMessageScroller {
     docCard.className = 'generic-doc-card';
     const sizeStr = mediaItem ? db.formatBytes(mediaItem.size) : '';
     docCard.innerHTML = `
-      <div class="doc-icon-wrap">${mediaUrl ? Icons.documentIcon('', 24) : Icons.spinner('doc-spinner', 20)}</div>
+      <div class="doc-icon-wrap">${mediaUrl ? Icons.documentIcon('', 24) : (isPending ? Icons.spinner('doc-spinner', 20) : Icons.documentIcon('', 22))}</div>
       <div class="doc-meta">
         <div class="doc-filename">${msg.mediaName || 'Document'}</div>
-        <div class="doc-filesize">${mediaUrl ? sizeStr : 'Loading...'}</div>
+        <div class="doc-filesize">${mediaUrl ? sizeStr : (isPending ? 'Loading...' : 'File unavailable')}</div>
       </div>
       <button type="button" class="doc-download-btn">${mediaUrl ? Icons.download('', 18) : ''}</button>
     `;
@@ -3018,17 +3092,19 @@ export class VirtualMessageScroller {
     }
     this._applyStructuralDecorations(row, bubble, updatedMsg);
 
-    // 5. Refresh standalone media / whiteboard card if updated in-place
-    if (updatedMsg.mediaId) {
-      const oldMediaWrap = bubble.querySelector('.media-image-wrap, .media-video-wrap');
-      if (oldMediaWrap && updatedMsg.isWhiteboard) {
+    // 5. Refresh or remove standalone media / whiteboard card if updated in-place
+    const existingMediaCard = bubble.querySelector('.media-image-wrap, .media-video-wrap, .pdf-card, .generic-doc-card, .wa-voice-card, .wa-audio-loading-holder');
+    if (!updatedMsg.mediaId && !updatedMsg.mediaName && !updatedMsg.mediaType) {
+      if (existingMediaCard) existingMediaCard.remove();
+    } else if (updatedMsg.mediaId) {
+      if (existingMediaCard && updatedMsg.isWhiteboard) {
         const prevCached = this.mediaCache.get(updatedMsg.mediaId);
         if (prevCached) {
           try { URL.revokeObjectURL(prevCached); } catch (_) {}
           this.mediaCache.delete(updatedMsg.mediaId);
         }
         const freshMedia = await this.renderMediaCard(updatedMsg);
-        if (freshMedia) oldMediaWrap.replaceWith(freshMedia);
+        if (freshMedia) existingMediaCard.replaceWith(freshMedia);
       }
     }
 

@@ -128,8 +128,13 @@ export class RichComposer {
           emb.dataset.embedFit = nextFit;
           emb.classList.toggle('is-fit-contain', nextFit === 'contain');
           emb.classList.toggle('is-fit-cover', nextFit !== 'contain');
+          if (nextFit === 'contain') {
+            emb.classList.remove('has-custom-h');
+            delete emb.dataset.embedHeightPx;
+            emb.style.removeProperty('--embed-h');
+          }
           embedFitBtn.textContent = nextFit === 'contain' ? 'Fit' : 'Fill';
-          embedFitBtn.title = nextFit === 'contain' ? 'Fit (contain) — click for Fill' : 'Fill (cover) — click for Fit';
+          embedFitBtn.title = nextFit === 'contain' ? 'Fit (natural aspect) — click for Fill' : 'Fill (cover) — click for Fit';
           this._pushHistory();
           this.onChange(this.getValue());
         }
@@ -311,13 +316,13 @@ export class RichComposer {
       if (!this.el.contains(range.startContainer)) return;
 
       let targetRect = null;
-      const rects = range.getClientRects ? range.getClientRects() : [];
-      if (rects && rects.length > 0) {
-        targetRect = rects[rects.length - 1];
-      } else if (range.getBoundingClientRect) {
-        const br = range.getBoundingClientRect();
-        if (br && (br.height > 0 || br.top > 0 || br.bottom > 0)) {
-          targetRect = br;
+      const br = range.getBoundingClientRect ? range.getBoundingClientRect() : null;
+      if (br && (br.height > 0 || br.top > 0 || br.bottom > 0)) {
+        targetRect = br;
+      } else {
+        const rects = range.getClientRects ? range.getClientRects() : [];
+        if (rects && rects.length > 0 && (rects[rects.length - 1].height > 0 || rects[rects.length - 1].top > 0)) {
+          targetRect = rects[rects.length - 1];
         }
       }
       if (!targetRect || (targetRect.top === 0 && targetRect.bottom === 0)) {
@@ -329,8 +334,8 @@ export class RichComposer {
       if (!targetRect) return;
 
       const elRect = this.el.getBoundingClientRect();
-      const padBottom = 18;
-      const padTop = 10;
+      const padBottom = 14;
+      const padTop = 8;
       if (targetRect.bottom > elRect.bottom - padBottom) {
         this.el.scrollTop += (targetRect.bottom - (elRect.bottom - padBottom));
       } else if (targetRect.top < elRect.top + padTop) {
@@ -1412,10 +1417,11 @@ export class RichComposer {
     this._ensureAtLeastOneBlock();
     this._pushHistory();
     this._saveSelection();
-    this.scrollCaretIntoView();
     const val = this.getValue();
     this.onChange(val);
     this.onSelectionChange(this.getActiveFormats());
+    // Scroll caret into view AFTER onChange/layout resize so max-line typing never jumps scrollTop to 0
+    this.scrollCaretIntoView();
   }
 
   _tryAutoFormatAtCaret() {
@@ -1864,9 +1870,9 @@ export class RichComposer {
         blockEl.after(nextP);
         this._placeCaretAtStart(nextP.firstChild || nextP);
         this._pushHistory();
-        this.scrollCaretIntoView();
         this.onChange(this.getValue());
         this.onSelectionChange(this.getActiveFormats());
+        this.scrollCaretIntoView();
         return;
       }
 
@@ -1936,9 +1942,9 @@ export class RichComposer {
         this._syncOrderedNumbers();
         this._placeCaretAtStart(nextBody);
         this._pushHistory();
-        this.scrollCaretIntoView();
         this.onChange(this.getValue());
         this.onSelectionChange(this.getActiveFormats());
+        this.scrollCaretIntoView();
         return;
       }
     }

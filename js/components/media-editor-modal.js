@@ -1,7 +1,27 @@
-// Component: Fullscreen WhatsApp Multi-Media & File Editor with Unified Rich Caption + Fullscreen Composer
+// Component: Fullscreen Multi-Media & File Editor with Full Rich Composer Parity & Drag-Resize
 import { Icons } from '../icons.js';
 import { RichComposer } from './rich-composer.js';
 import { HIGHLIGHT_COLORS, escapeHtml } from '../utils/rich-text.js';
+
+const POPOVER_FORMAT_TOOLS = new Set(['highlight', 'header', 'ul', 'align']);
+const TOOL_ACTION_NAMES = {
+  bold: 'Bold (عريض)',
+  italic: 'Italic (مائل)',
+  underline: 'Underline (خط سفلي)',
+  strike: 'Strikethrough (مشطوب)',
+  spoiler: 'Spoiler (نص مخفي)',
+  check: 'Checklist (مربعات اختيار)',
+  fold: 'Fold Block (طي وفرد)',
+  ol: 'Numbered List (قائمة مرقمة)',
+  'indent-inc': 'Indent (إزاحة للداخل)',
+  'indent-dec': 'Outdent (إزاحة للخارج)',
+  link: 'Link (رابط على كلمة)',
+  quote: 'Quote (اقتباس)',
+  code: 'Inline Code (كود)',
+  codeblock: 'Code Block (مربع كود)',
+  sup: 'Superscript (أس علوي)',
+  sub: 'Subscript (دليل سفلي)'
+};
 
 export class MediaEditorModal {
   constructor(options = {}) {
@@ -17,6 +37,10 @@ export class MediaEditorModal {
     this.initialCaption = '';
     this.richComposer = null;
     this._sent = false;
+    this._activePopover = null;
+    this._manualCaptionHeightPx = null;
+    this._isEditorFocused = false;
+    this._tooltipTimer = null;
   }
 
   _classifyFile(file) {
@@ -49,6 +73,9 @@ export class MediaEditorModal {
     this.acceptMode = options.accept || 'image/*,video/*';
     this._sent = false;
     this.isCaptionFullscreen = false;
+    this._manualCaptionHeightPx = null;
+    this._activePopover = null;
+    this._isEditorFocused = false;
 
     this.items = initialFiles.map((file) => {
       const cls = this._classifyFile(file);
@@ -116,7 +143,7 @@ export class MediaEditorModal {
         ${this.renderActivePreview(currentItem)}
       </div>
 
-      <!-- Bottom Panel: Thumbnails, Rich Caption (with Fullscreen Mode) & Send -->
+      <!-- Bottom Panel: Thumbnails, Resizable Rich Caption (Full Formatting Parity + Fullscreen) & Send -->
       <footer class="media-editor-footer" id="media-editor-footer">
         <div class="editor-caption-fs-header" id="editor-caption-fs-header" style="display: none;">
           <button type="button" class="editor-icon-btn" id="btn-editor-caption-fs-back" aria-label="Exit caption fullscreen">
@@ -126,6 +153,7 @@ export class MediaEditorModal {
           <div class="editor-caption-fs-actions">
             <button type="button" class="editor-icon-btn" id="btn-ed-rc-undo" title="Undo">${Icons.undo('', 20)}</button>
             <button type="button" class="editor-icon-btn" id="btn-ed-rc-redo" title="Redo">${Icons.redo('', 20)}</button>
+            <button type="button" class="editor-icon-btn" id="btn-ed-rc-clear" title="Clear formatting">${Icons.clearFormat('', 20)}</button>
           </div>
         </div>
 
@@ -134,31 +162,47 @@ export class MediaEditorModal {
           ${this.renderThumbnailsHtml()}
         </div>
 
-        <!-- Rich Caption Bar -->
-        <div class="editor-caption-wrap">
+        <!-- Rich Caption Bar (Drag-Resizable + Full Format Toolbar + Popovers) -->
+        <div class="editor-caption-wrap" id="editor-caption-wrap">
           <div class="editor-caption-pill" id="editor-caption-pill">
-            <div class="chat-rich-editor is-empty editor-rich-caption" id="editor-caption-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Add a caption..." dir="auto"></div>
-            <button type="button" class="editor-caption-fs-btn" id="btn-editor-caption-fs" title="Fullscreen & formatting" aria-label="Fullscreen caption">
-              ${Icons.formatText('', 20)}
-            </button>
+            <div class="editor-caption-drag-handle" id="editor-caption-drag-handle" aria-label="Drag to resize caption box">
+              <div class="chat-input-drag-dash"></div>
+              <button type="button" class="editor-caption-fs-btn" id="btn-editor-caption-fs" title="Fullscreen & formatting" aria-label="Fullscreen caption">
+                ${Icons.formatText('', 15)}
+              </button>
+            </div>
+            <div class="editor-caption-main-row">
+              <div class="chat-rich-editor is-empty editor-rich-caption" id="editor-caption-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Add a caption..." dir="auto"></div>
+            </div>
           </div>
 
-          <div class="editor-caption-toolbar" id="editor-caption-toolbar" style="display:none;">
-            <button type="button" class="format-tool-btn" data-ed-fmt="bold" title="Bold"><strong>B</strong></button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="italic" title="Italic"><em>I</em></button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="underline" title="Underline"><u>U</u></button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="strike" title="Strike"><del>S</del></button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="highlight" title="Highlight">${Icons.highlight('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="code" title="Code">${Icons.codeBlock('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="check" title="Checklist">${Icons.checklist('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="ul" title="List">${Icons.listBulleted('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="ol" title="Numbered">${Icons.listNumbered('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="quote" title="Quote">${Icons.quote('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="align-left" title="Align Left">${Icons.alignLeft('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="align-center" title="Align Center">${Icons.alignCenter('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="align-right" title="Align Right">${Icons.alignRight('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="dir-rtl" title="RTL">${Icons.textDirRtl('', 20)}</button>
-            <button type="button" class="format-tool-btn" data-ed-fmt="dir-ltr" title="LTR">${Icons.textDirLtr('', 20)}</button>
+          <div class="editor-caption-toolbar-wrap" id="editor-caption-toolbar-wrap" style="display:none;">
+            <div class="composer-popover" id="me-toolbar-popover-host" style="display:none;"></div>
+            <div class="editor-caption-toolbar" id="editor-caption-toolbar" role="toolbar" aria-label="Caption formatting tools">
+              <button type="button" class="format-tool-btn" data-ed-fmt="align" aria-label="Alignment & Direction">${Icons.alignLeft('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="bold" title="Bold (*text*)"><strong>B</strong></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="italic" title="Italic (_text_)"><em>I</em></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="underline" title="Underline (++text++)"><u>U</u></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="strike" title="Strikethrough (~text~)"><del>S</del></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="highlight" aria-label="Highlight Color">${Icons.highlight('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="header" aria-label="Headers H1-H3"><span class="fmt-txt-icon">H</span></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="spoiler" title="Spoiler (||text||)">${Icons.spoilerEye('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="check" title="Checklist ([ ] )">${Icons.checklist('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="fold" title="Fold Block ([fold:Title]...[/fold])">${Icons.collapseAll('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="ul" aria-label="List Shapes">${Icons.listBulleted('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="ol" title="Numbered List (1. )">${Icons.listNumbered('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="indent-inc" title="Increase Indent">${Icons.indentIncrease('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="indent-dec" title="Decrease Indent">${Icons.indentDecrease('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="link" title="Link on Word">${Icons.linkIcon('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="quote" title="Quote (> )">${Icons.quote('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="code" title="Inline Code (\`code\`)">${Icons.codeBlock('', 21)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="codeblock" title="Code Block (\`\`\` )"><span class="fmt-txt-icon">{ }</span></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="sup" title="Superscript (^^x^^)"><span class="fmt-txt-icon">x²</span></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="sub" title="Subscript (,,x,,)"><span class="fmt-txt-icon">x₂</span></button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="undo" title="Undo">${Icons.undo('', 19)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="redo" title="Redo">${Icons.redo('', 19)}</button>
+              <button type="button" class="format-tool-btn" data-ed-fmt="clear" title="Clear formatting">${Icons.clearFormat('', 19)}</button>
+            </div>
           </div>
         </div>
 
@@ -248,14 +292,60 @@ export class MediaEditorModal {
     }
   }
 
+  _closeFormatPopover() {
+    const pop = this.container?.querySelector('#me-toolbar-popover-host');
+    if (pop) {
+      pop.style.display = 'none';
+      pop.innerHTML = '';
+    }
+    this._activePopover = null;
+  }
+
+  _syncCaptionLayout() {
+    if (!this.container) return;
+    const editorEl = this.container.querySelector('#editor-caption-editor');
+    const pillEl = this.container.querySelector('#editor-caption-pill');
+    const toolbarWrap = this.container.querySelector('#editor-caption-toolbar-wrap');
+    const dragHandle = this.container.querySelector('#editor-caption-drag-handle');
+    const val = this.richComposer ? this.richComposer.getValue() : '';
+    const hasContent = val.length > 0;
+    const showControls = this.isCaptionFullscreen || this._isEditorFocused || hasContent || this._manualCaptionHeightPx !== null;
+
+    this.container.classList.toggle('is-caption-active', showControls);
+    if (dragHandle) {
+      dragHandle.style.display = (!this.isCaptionFullscreen && showControls) ? 'flex' : 'none';
+    }
+    if (toolbarWrap) {
+      toolbarWrap.style.display = showControls ? 'block' : 'none';
+    }
+
+    if (pillEl && editorEl) {
+      const prevScroll = editorEl.scrollTop;
+      if (this.isCaptionFullscreen) {
+        pillEl.style.height = '';
+        editorEl.style.maxHeight = 'none';
+      } else if (this._manualCaptionHeightPx !== null) {
+        pillEl.style.height = `${this._manualCaptionHeightPx}px`;
+        editorEl.style.maxHeight = `${Math.max(44, this._manualCaptionHeightPx - 28)}px`;
+      } else {
+        pillEl.style.height = '';
+        editorEl.style.maxHeight = '';
+      }
+      editorEl.scrollTop = prevScroll;
+    }
+  }
+
   setCaptionFullscreen(enable) {
     this.isCaptionFullscreen = Boolean(enable);
+    this._closeFormatPopover();
     if (!this.container) return;
     this.container.classList.toggle('is-caption-fullscreen', this.isCaptionFullscreen);
     const fsHeader = this.container.querySelector('#editor-caption-fs-header');
-    const toolbar = this.container.querySelector('#editor-caption-toolbar');
     if (fsHeader) fsHeader.style.display = this.isCaptionFullscreen ? 'flex' : 'none';
-    if (toolbar) toolbar.style.display = this.isCaptionFullscreen ? 'flex' : 'none';
+    if (this.isCaptionFullscreen) {
+      this._manualCaptionHeightPx = null;
+    }
+    this._syncCaptionLayout();
     if (this.isCaptionFullscreen) {
       setTimeout(() => {
         this.richComposer?.focus();
@@ -264,8 +354,104 @@ export class MediaEditorModal {
     }
   }
 
+  _updateToolbarActiveStates(activeFormats) {
+    const toolbar = this.container?.querySelector('#editor-caption-toolbar');
+    if (!toolbar || !activeFormats) return;
+    toolbar.querySelectorAll('.format-tool-btn[data-ed-fmt]').forEach((btn) => {
+      const fmt = btn.dataset.edFmt;
+      let on = false;
+      if (fmt === 'header') on = ['h1', 'h2', 'h3'].includes(activeFormats.block);
+      else if (fmt === 'align') on = Boolean(activeFormats.align || activeFormats.dir);
+      else if (fmt in activeFormats) on = Boolean(activeFormats[fmt]);
+      else if (['ul', 'ol', 'check', 'quote', 'codeblock'].includes(fmt)) on = activeFormats.block === fmt;
+      btn.classList.toggle('is-active', on);
+    });
+    const undoBtn = this.container?.querySelector('#btn-ed-rc-undo');
+    const redoBtn = this.container?.querySelector('#btn-ed-rc-redo');
+    if (undoBtn && this.richComposer) undoBtn.disabled = !this.richComposer.canUndo();
+    if (redoBtn && this.richComposer) redoBtn.disabled = !this.richComposer.canRedo();
+  }
+
+  async _openWordLinkDialog() {
+    if (!this.richComposer) return;
+    const selectedLabel = this.richComposer.getSelectedText() || '';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay custom-dialog-overlay active';
+    overlay.style.zIndex = '10500';
+    overlay.innerHTML = `
+      <div class="custom-dialog-card" role="dialog" aria-modal="true">
+        <h3 class="custom-dialog-title">Insert Word Link</h3>
+        <div class="custom-dialog-body composer-modal-fields">
+          <label class="composer-modal-field">
+            <span>Display word / text</span>
+            <input type="text" class="custom-dialog-input composer-dialog-input" id="me-wl-label" value="${escapeHtml(selectedLabel)}" placeholder="Text to link" dir="auto" />
+          </label>
+          <label class="composer-modal-field">
+            <span>URL (https://...)</span>
+            <input type="url" class="custom-dialog-input composer-dialog-input" id="me-wl-url" placeholder="https://example.com" dir="ltr" />
+          </label>
+        </div>
+        <div class="custom-dialog-actions">
+          <button type="button" class="dialog-btn dialog-btn-cancel" id="me-wl-cancel">Cancel</button>
+          <button type="button" class="dialog-btn dialog-btn-confirm" id="me-wl-apply">Apply</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const urlInput = overlay.querySelector('#me-wl-url');
+    const labelInput = overlay.querySelector('#me-wl-label');
+    (selectedLabel ? urlInput : labelInput)?.focus();
+
+    const closeModal = () => overlay.remove();
+    overlay.querySelector('#me-wl-cancel')?.addEventListener('click', closeModal);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+    overlay.querySelector('#me-wl-apply')?.addEventListener('click', () => {
+      const lbl = (labelInput?.value || '').trim();
+      let url = (urlInput?.value || '').trim();
+      if (url && !/^https?:\/\//i.test(url) && !/^mailto:/i.test(url)) {
+        url = `https://${url}`;
+      }
+      if (url) {
+        this.richComposer?.insertWordLink(lbl || url, url);
+      }
+      closeModal();
+    });
+  }
+
+  _showTooltip(btn, text) {
+    if (!this.container || !btn || !text) return;
+    clearTimeout(this._tooltipTimer);
+    let el = this.container.querySelector('#me-action-tooltip');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'me-action-tooltip';
+      el.className = 'composer-action-tooltip';
+      this.container.appendChild(el);
+    }
+    el.textContent = text;
+    el.style.display = 'block';
+    const rect = btn.getBoundingClientRect();
+    const pRect = this.container.getBoundingClientRect();
+    el.style.top = `${Math.max(12, Math.round(rect.top - pRect.top - 36))}px`;
+    el.style.left = `${Math.max(12, Math.min(pRect.width - 160, Math.round(rect.left - pRect.left + rect.width / 2 - 60)))}px`;
+    this._tooltipTimer = setTimeout(() => {
+      if (el) el.style.display = 'none';
+    }, 1500);
+  }
+
+  _hideTooltip() {
+    clearTimeout(this._tooltipTimer);
+    const el = this.container?.querySelector('#me-action-tooltip');
+    if (el) el.style.display = 'none';
+  }
+
   bindEvents() {
     const editorEl = this.container.querySelector('#editor-caption-editor');
+    const pillEl = this.container.querySelector('#editor-caption-pill');
+    const dragHandle = this.container.querySelector('#editor-caption-drag-handle');
+    const fsHeader = this.container.querySelector('#editor-caption-fs-header');
+    const popoverHost = this.container.querySelector('#me-toolbar-popover-host');
+
     const triggerSend = () => {
       const caption = (this.richComposer ? this.richComposer.getValue() : '').trim();
       const files = this.items.map((i) => i.file);
@@ -275,6 +461,13 @@ export class MediaEditorModal {
     };
 
     this.richComposer = new RichComposer(editorEl, {
+      onChange: () => {
+        this._syncCaptionLayout();
+        this.richComposer?.scrollCaretIntoView();
+      },
+      onSelectionChange: (activeFormats) => {
+        this._updateToolbarActiveStates(activeFormats);
+      },
       onSubmit: triggerSend,
       shouldEnterSend: () => !this.isCaptionFullscreen && localStorage.getItem('wa_enter_to_send') !== 'false' && window.matchMedia?.('(pointer: fine)')?.matches
     });
@@ -283,14 +476,93 @@ export class MediaEditorModal {
       this.richComposer.setValue(this.initialCaption);
     }
 
+    // Immediate focus/touch reveal for drag handle + full format toolbar
+    let blurTimer = null;
+    const onFocusActivate = () => {
+      clearTimeout(blurTimer);
+      if (!this._isEditorFocused) {
+        this._isEditorFocused = true;
+        this._syncCaptionLayout();
+      }
+    };
+    editorEl.addEventListener('pointerdown', onFocusActivate);
+    editorEl.addEventListener('focus', () => {
+      onFocusActivate();
+      this.richComposer?.scrollCaretIntoView();
+    });
+    editorEl.addEventListener('blur', () => {
+      clearTimeout(blurTimer);
+      blurTimer = setTimeout(() => {
+        if (!this.container) return;
+        const ae = document.activeElement;
+        const insideCaptionUi = Boolean(ae && this.container.querySelector('#editor-caption-wrap')?.contains(ae));
+        if (!insideCaptionUi) {
+          this._isEditorFocused = false;
+          this._syncCaptionLayout();
+        }
+      }, 90);
+    });
+
+    // Free drag-resize of caption pill (pull up to expand freely or snap into fullscreen >= 78%)
+    const startCaptionDrag = (e) => {
+      if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
+      if (e.target.closest('button')) return;
+      if (!pillEl) return;
+
+      const startY = e.clientY;
+      const modalH = Math.max(320, this.container.getBoundingClientRect().height || window.innerHeight || 640);
+      const startH = this.isCaptionFullscreen ? Math.round(modalH * 0.85) : pillEl.getBoundingClientRect().height;
+      let dragging = false;
+      let latestH = startH;
+
+      const onMove = (ev) => {
+        const dy = startY - ev.clientY;
+        if (!dragging) {
+          if (Math.abs(dy) < 6) return;
+          dragging = true;
+          this.container.classList.add('is-caption-dragging');
+        }
+        ev.preventDefault();
+        latestH = Math.max(52, Math.min(modalH * 0.9, startH + dy));
+        const ratio = latestH / modalH;
+        if (ratio >= 0.78) {
+          if (!this.isCaptionFullscreen) this.setCaptionFullscreen(true);
+        } else {
+          if (this.isCaptionFullscreen) this.setCaptionFullscreen(false);
+          this._manualCaptionHeightPx = Math.round(latestH);
+          this._syncCaptionLayout();
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        this.container?.classList.remove('is-caption-dragging');
+        if (!dragging) return;
+        if (latestH <= 76 && !this.isCaptionFullscreen) {
+          this._manualCaptionHeightPx = null;
+          this._syncCaptionLayout();
+        }
+      };
+
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    };
+
+    if (dragHandle) dragHandle.addEventListener('pointerdown', startCaptionDrag);
+    if (fsHeader) fsHeader.addEventListener('pointerdown', startCaptionDrag);
+
     // Close
     this.container.querySelector('#btn-editor-close').addEventListener('click', () => {
       this.close(true);
     });
 
-    // Fullscreen toggle
+    // Fullscreen toggle & header undo/redo/clear
     this.container.querySelector('#btn-editor-caption-fs')?.addEventListener('click', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       this.setCaptionFullscreen(!this.isCaptionFullscreen);
     });
     this.container.querySelector('#btn-editor-caption-fs-back')?.addEventListener('click', () => {
@@ -298,24 +570,166 @@ export class MediaEditorModal {
     });
     this.container.querySelector('#btn-ed-rc-undo')?.addEventListener('click', () => this.richComposer?.undo());
     this.container.querySelector('#btn-ed-rc-redo')?.addEventListener('click', () => this.richComposer?.redo());
+    this.container.querySelector('#btn-ed-rc-clear')?.addEventListener('click', () => this.richComposer?.clearFormatting());
 
-    // Formatting buttons in fullscreen caption toolbar
+    // Full Rich Formatting Toolbar + Popovers
     this.container.querySelectorAll('.format-tool-btn[data-ed-fmt]').forEach((btn) => {
       btn.addEventListener('mousedown', (e) => e.preventDefault());
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.preventDefault();
-        const fmt = btn.dataset.edFmt;
+        e.stopPropagation();
         if (!this.richComposer) return;
-        if (['bold', 'italic', 'underline', 'strike', 'code'].includes(fmt)) {
-          this.richComposer.toggleInline(fmt);
-        } else if (fmt === 'highlight') {
-          this.richComposer.toggleInline('highlight', 'y');
-        } else if (['check', 'ul', 'ol', 'quote'].includes(fmt)) {
+        const fmt = btn.dataset.edFmt;
+
+        if (POPOVER_FORMAT_TOOLS.has(fmt)) {
+          this._hideTooltip();
+        } else if (TOOL_ACTION_NAMES[fmt]) {
+          this._showTooltip(btn, TOOL_ACTION_NAMES[fmt]);
+        }
+
+        if (fmt === 'align' && popoverHost) {
+          if (this._activePopover === 'align') { this._closeFormatPopover(); return; }
+          this._activePopover = 'align';
+          const curFmt = this.richComposer.getActiveFormats();
+          popoverHost.innerHTML = `
+            <div class="composer-popover-title">Alignment & Direction (المحاذاة والاتجاه)</div>
+            <div class="composer-align-grid">
+              <button type="button" class="composer-align-btn ${curFmt.align === 'left' ? 'is-active' : ''}" data-al="left">${Icons.alignLeft('', 18)}<span>Left</span></button>
+              <button type="button" class="composer-align-btn ${curFmt.align === 'center' ? 'is-active' : ''}" data-al="center">${Icons.alignCenter('', 18)}<span>Center</span></button>
+              <button type="button" class="composer-align-btn ${curFmt.align === 'right' ? 'is-active' : ''}" data-al="right">${Icons.alignRight('', 18)}<span>Right</span></button>
+            </div>
+            <div class="composer-dir-grid">
+              <button type="button" class="composer-align-btn ${!curFmt.dir ? 'is-active' : ''}" data-dir="auto">Auto</button>
+              <button type="button" class="composer-align-btn ${curFmt.dir === 'ltr' ? 'is-active' : ''}" data-dir="ltr">${Icons.textDirLtr('', 16)}<span>LTR</span></button>
+              <button type="button" class="composer-align-btn ${curFmt.dir === 'rtl' ? 'is-active' : ''}" data-dir="rtl">${Icons.textDirRtl('', 16)}<span>RTL</span></button>
+            </div>
+          `;
+          popoverHost.style.display = 'block';
+          popoverHost.querySelectorAll('[data-al]').forEach((ab) => {
+            ab.addEventListener('mousedown', (ev) => ev.preventDefault());
+            ab.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.richComposer.setBlockAlignment(ab.dataset.al);
+              this._closeFormatPopover();
+            });
+          });
+          popoverHost.querySelectorAll('[data-dir]').forEach((dbBtn) => {
+            dbBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+            dbBtn.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.richComposer.setBlockDirection(dbBtn.dataset.dir);
+              this._closeFormatPopover();
+            });
+          });
+          return;
+        }
+
+        if (fmt === 'highlight' && popoverHost) {
+          if (this._activePopover === 'highlight') { this._closeFormatPopover(); return; }
+          this._activePopover = 'highlight';
+          const swatches = Object.entries(HIGHLIGHT_COLORS).map(([code, def]) => `
+            <button type="button" class="hl-swatch-btn wa-hl-${def.name}" data-hl-code="${code}">
+              <span class="hl-swatch-dot" style="background:${def.hex};"></span>
+              <span>${def.label}</span>
+            </button>
+          `).join('');
+          popoverHost.innerHTML = `
+            <div class="composer-popover-title">Highlight Color (اختر لون التظليل)</div>
+            <div class="composer-popover-row">
+              ${swatches}
+              <button type="button" class="hl-swatch-btn hl-clear-btn" data-hl-code="none">Remove</button>
+            </div>
+          `;
+          popoverHost.style.display = 'block';
+          popoverHost.querySelectorAll('[data-hl-code]').forEach((sw) => {
+            sw.addEventListener('mousedown', (ev) => ev.preventDefault());
+            sw.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.richComposer.toggleInline('highlight', sw.dataset.hlCode);
+              this._closeFormatPopover();
+            });
+          });
+          return;
+        }
+
+        if (fmt === 'header' && popoverHost) {
+          if (this._activePopover === 'header') { this._closeFormatPopover(); return; }
+          this._activePopover = 'header';
+          const curBlock = this.richComposer.getActiveFormats().block;
+          popoverHost.innerHTML = `
+            <div class="composer-popover-title">Headers (اختر حجم العنوان)</div>
+            <div class="composer-popover-row">
+              ${['p', 'h1', 'h2', 'h3'].map((b) => `
+                <button type="button" class="header-pick-btn ${curBlock === b ? 'is-active' : ''}" data-h-block="${b}">
+                  ${b === 'p' ? 'Normal' : b.toUpperCase()}
+                </button>
+              `).join('')}
+            </div>
+          `;
+          popoverHost.style.display = 'block';
+          popoverHost.querySelectorAll('[data-h-block]').forEach((hb) => {
+            hb.addEventListener('mousedown', (ev) => ev.preventDefault());
+            hb.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.richComposer.toggleBlock(hb.dataset.hBlock);
+              this._closeFormatPopover();
+            });
+          });
+          return;
+        }
+
+        if (fmt === 'ul' && popoverHost) {
+          if (this._activePopover === 'ul') { this._closeFormatPopover(); return; }
+          this._activePopover = 'ul';
+          popoverHost.innerHTML = `
+            <div class="composer-popover-title">List Shapes (أشكال القوائم النقطية)</div>
+            <div class="composer-popover-row">
+              <button type="button" class="list-shape-pick-btn" data-ul-shape="bullet">
+                <span class="shape-glyph is-bullet">•</span>
+                <span>نقطة عريضة</span>
+              </button>
+              <button type="button" class="list-shape-pick-btn" data-ul-shape="arrow">
+                <span class="shape-glyph is-arrow">→</span>
+                <span>سهم عادي</span>
+              </button>
+              <button type="button" class="list-shape-pick-btn" data-ul-shape="branch">
+                <span class="shape-glyph is-branch">↳</span>
+                <span>سهم متفرع</span>
+              </button>
+            </div>
+          `;
+          popoverHost.style.display = 'block';
+          popoverHost.querySelectorAll('[data-ul-shape]').forEach((sb) => {
+            sb.addEventListener('mousedown', (ev) => ev.preventDefault());
+            sb.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.richComposer.toggleBlock('ul', { bulletType: sb.dataset.ulShape });
+              this._closeFormatPopover();
+            });
+          });
+          return;
+        }
+
+        this._closeFormatPopover();
+
+        if (fmt === 'fold') {
+          this.richComposer.insertFoldBlock();
+        } else if (fmt === 'link') {
+          await this._openWordLinkDialog();
+        } else if (fmt === 'indent-inc') {
+          this.richComposer.indent(1);
+        } else if (fmt === 'indent-dec') {
+          this.richComposer.indent(-1);
+        } else if (fmt === 'undo') {
+          this.richComposer.undo();
+        } else if (fmt === 'redo') {
+          this.richComposer.redo();
+        } else if (fmt === 'clear') {
+          this.richComposer.clearFormatting();
+        } else if (['ol', 'check', 'quote', 'codeblock'].includes(fmt)) {
           this.richComposer.toggleBlock(fmt);
-        } else if (fmt.startsWith('align-')) {
-          this.richComposer.setBlockAlignment(fmt.slice(6));
-        } else if (fmt.startsWith('dir-')) {
-          this.richComposer.setBlockDirection(fmt.slice(4));
+        } else {
+          this.richComposer.toggleInline(fmt);
         }
       });
     });
@@ -332,6 +746,7 @@ export class MediaEditorModal {
     // Send Button
     this.container.querySelector('#btn-editor-send').addEventListener('click', triggerSend);
 
+    this._syncCaptionLayout();
     this.bindThumbnailEvents();
   }
 
@@ -389,6 +804,7 @@ export class MediaEditorModal {
       return;
     }
 
+    clearTimeout(this._tooltipTimer);
     const latestCaption = this.richComposer ? this.richComposer.getValue() : this.initialCaption;
     if (!this._sent && typeof this.onCancel === 'function') {
       try {

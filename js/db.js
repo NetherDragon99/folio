@@ -1,5 +1,6 @@
-// IndexedDB Storage Layer for WhatsApp Android Clone
+// IndexedDB Storage Layer for Folio
 import { storageBackup } from './utils/storage-backup.js';
+import { assetUrl } from './config/base-path.js';
 
 const DB_NAME = 'WhatsAppCloneDB';
 const DB_VERSION = 1;
@@ -10,6 +11,8 @@ class Database {
     this.initPromise = null;
     this._callsBackfillChecked = false;
     this._isBackfillingCalls = false;
+    this._missingMediaMisses = new Set();
+    this._demoZipEntriesPromise = null;
   }
 
   generateUUID() {
@@ -544,12 +547,140 @@ class Database {
     if (mediaItem && !mediaItem.timestamp) {
       mediaItem.timestamp = Date.now();
     }
+    if (mediaItem && mediaItem.id) {
+      this._missingMediaMisses.delete(String(mediaItem.id));
+    }
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction('media', 'readwrite');
       tx.objectStore('media').put(mediaItem);
-      tx.oncomplete = () => resolve(mediaItem);
+      tx.oncomplete = () => {
+        storageBackup.scheduleBackup(this, 1500);
+        resolve(mediaItem);
+      };
       tx.onerror = () => reject(tx.error);
     });
+  }
+
+  async _getDemoZipMediaMap() {
+    if (this._demoZipEntriesPromise) return this._demoZipEntriesPromise;
+    this._demoZipEntriesPromise = (async () => {
+      try {
+        if (typeof fetch !== 'function' || typeof window === 'undefined' || !window.fflate) {
+          return null;
+        }
+        const resp = await fetch(assetUrl('assets/demo_whatsapp_archive.zip'));
+        if (!resp || !resp.ok) return null;
+        const buf = await resp.arrayBuffer();
+        const unzipped = await new Promise((resolve, reject) => {
+          window.fflate.unzip(new Uint8Array(buf), (err, res) => (err ? reject(err) : resolve(res)));
+        });
+        const map = new Map();
+        for (const [rawPath, bytes] of Object.entries(unzipped || {})) {
+          if (!rawPath || rawPath.endsWith('/') || rawPath.toLowerCase().endsWith('.txt')) continue;
+          const base = rawPath.replace(/^.*[\\/]/, '').trim();
+          if (base) map.set(base.toLowerCase(), { filename: base, bytes });
+        }
+        return map;
+      } catch (_) {
+        return null;
+      }
+    })();
+    return this._demoZipEntriesPromise;
+  }
+
+  _inferMimeFromFilename(filename = '', mediaType = '') {
+    const lower = String(filename || '').toLowerCase();
+    if (/\.webp$/i.test(lower) || mediaType === 'sticker') return 'image/webp';
+    if (/\.png$/i.test(lower)) return 'image/png';
+    if (/\.(jpg|jpeg)$/i.test(lower) || mediaType === 'image') return 'image/jpeg';
+    if (/\.webm$/i.test(lower)) return mediaType === 'audio' ? 'audio/webm' : 'video/webm';
+    if (/\.(mp4|mov|mkv|3gp)$/i.test(lower) || mediaType === 'video') return 'video/mp4';
+    if (/\.(opus|ogg)$/i.test(lower)) return 'audio/ogg; codecs=opus';
+    if (/\.(m4a|aac)$/i.test(lower)) return 'audio/mp4';
+    if (/\.mp3$/i.test(lower)) return 'audio/mpeg';
+    if (/\.pdf$/i.test(lower) || mediaType === 'pdf') return 'application/pdf';
+    return 'application/octet-stream';
+  }
+
+  async resolveMediaForMessage(msg) {
+    if (!msg) return null;
+    await this.init();
+
+    // 1. Primary lookup by mediaId
+    if (msg.mediaId) {
+      try {
+        const direct = await this.getMedia(msg.mediaId);
+        if (direct && direct.blob) return direct;
+      } catch (_) {}
+    }
+
+    // 2. Fallback lookup by normalized filename within the same chat (handles stale mediaIds across restores)
+    const rawName = (msg.mediaName || '').trim();
+    const baseName = rawName.replace(/^.*[\\/]/, '').trim();
+    if (baseName && msg.chatId) {
+      try {
+        const chatMedia = await this.getMediaByChat(msg.chatId);
+        const lowerTarget = baseName.toLowerCase();
+        const match = chatMedia.find((m) =>
+          m && m.blob && (m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase() === lowerTarget
+        );
+        if (match) {
+          if (msg.id && match.id && match.id !== msg.mediaId) {
+            msg.mediaId = match.id;
+            this.updateMessage(msg.id, { mediaId: match.id }).catch(() => {});
+          }
+          return match;
+        }
+      } catch (_) {}
+    }
+
+    // 3. Secondary backup recovery or built-in Demo Archive auto-heal
+    const missKey = `${msg.mediaId || ''}::${baseName.toLowerCase()}`;
+    if (this._missingMediaMisses.has(missKey)) return null;
+
+    try {
+      const backupSnap = await storageBackup.readFromSecondaryIdb();
+      if (backupSnap && Array.isArray(backupSnap.media)) {
+        const match = backupSnap.media.find((m) =>
+          m && m.blob && (
+            (msg.mediaId && String(m.id) === String(msg.mediaId)) ||
+            (baseName && (m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase() === baseName.toLowerCase())
+          )
+        );
+        if (match) {
+          const healed = { ...match, id: msg.mediaId || match.id };
+          await this.saveMedia(healed);
+          return healed;
+        }
+      }
+    } catch (_) {}
+
+    if (baseName) {
+      try {
+        const demoMap = await this._getDemoZipMediaMap();
+        const entry = demoMap ? demoMap.get(baseName.toLowerCase()) : null;
+        if (entry && entry.bytes) {
+          const mimeType = this._inferMimeFromFilename(entry.filename, msg.mediaType);
+          const blob = new Blob([entry.bytes], { type: mimeType });
+          const healedRecord = {
+            id: msg.mediaId || ('media_healed_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
+            chatId: msg.chatId,
+            filename: entry.filename,
+            type: msg.mediaType || 'document',
+            mimeType,
+            blob,
+            size: blob.size,
+            duration: msg.duration || 0,
+            timestamp: msg.timestamp || Date.now()
+          };
+          await this.saveMedia(healedRecord);
+          return healedRecord;
+        }
+      } catch (_) {}
+    }
+
+    this._missingMediaMisses.add(missKey);
+    return null;
   }
 
   async saveMediaBatch(items) {
