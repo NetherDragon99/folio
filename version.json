@@ -1,5 +1,5 @@
 {
-  "version": "3.0.2",
-  "cacheName": "folio-v3.0.2",
-  "notes": "Folio v3.0.2: Removable media chips during message edit, full-width landscape Note Mode media, natural-ratio tight inline embeds, non-jumping Nested Tree & Drag Reorder scroll lock, composer max-line scroll preservation & immediate focus controls, persistent media recovery & no stuck spinners, full Rich Composer parity & drag-resize inside MediaEditorModal, and WhatsApp-style tabbed Sticker Drawer."
+  "version": "3.0.3",
+  "cacheName": "folio-v3.0.3",
+  "notes": "Folio v3.0.3: Exclude inline embeds from external edit-banner media chips, full 100% embed box height fill & smooth pointer-captured vertical resizing with auto Fit-to-Fill, and choreographed Selection Mode header cascade with slim vertical icon rail & classic 3-dots toggle."
 }

@@ -129,7 +129,7 @@ export class RichComposer {
           emb.classList.toggle('is-fit-contain', nextFit === 'contain');
           emb.classList.toggle('is-fit-cover', nextFit !== 'contain');
           if (nextFit === 'contain') {
-            emb.classList.remove('has-custom-h');
+            emb.classList.remove('has-custom-h', 'is-tall-card');
             delete emb.dataset.embedHeightPx;
             emb.style.removeProperty('--embed-h');
           }
@@ -486,13 +486,14 @@ export class RichComposer {
       const layout = options.layout || 'full';
       const fit = options.fit === 'contain' ? 'contain' : 'cover';
       const widthPct = options.widthPct ? Math.max(22, Math.min(88, Math.round(Number(options.widthPct)))) : null;
-      const heightPx = options.heightPx ? Math.max(64, Math.min(460, Math.round(Number(options.heightPx)))) : null;
+      const heightPx = options.heightPx ? Math.max(56, Math.min(560, Math.round(Number(options.heightPx)))) : null;
       const label = options.label || (kind === 'image' ? 'Photo' : (kind === 'audio' ? 'Voice note' : (kind === 'whiteboard' ? 'Whiteboard' : 'File')));
       const previewUrl = options.previewUrl || this._embedPreviewUrls.get(mediaId) || '';
       if (previewUrl && mediaId) this._embedPreviewUrls.set(mediaId, previewUrl);
 
       const div = document.createElement('div');
-      div.className = `rc-block rc-embed rc-embed-kind-${kind} is-layout-${layout} is-fit-${fit}${heightPx ? ' has-custom-h' : ''}`;
+      const isTallCard = Boolean(heightPx && heightPx >= 120);
+      div.className = `rc-block rc-embed rc-embed-kind-${kind} is-layout-${layout} is-fit-${fit}${heightPx ? ' has-custom-h' : ''}${isTallCard ? ' is-tall-card' : ''}`;
       div.dataset.block = 'embed';
       div.dataset.embedKind = kind;
       div.dataset.embedMediaId = mediaId;
@@ -655,19 +656,41 @@ export class RichComposer {
 
         const dir = handle.dataset.resize || 's';
         const layout = embedEl.dataset.embedLayout || 'full';
+        const stageEl = embedEl.querySelector('.rc-embed-stage') || embedEl;
         const parentW = Math.max(200, (embedEl.parentNode?.clientWidth || this.el?.clientWidth || 320));
-        const startRect = embedEl.getBoundingClientRect();
+        const startEmbedRect = embedEl.getBoundingClientRect();
+        const startStageRect = stageEl.getBoundingClientRect();
         const startX = e.clientX;
         const startY = e.clientY;
-        const startW = startRect.width;
-        const startH = startRect.height;
+        const startW = startEmbedRect.width;
+        const startH = Math.max(56, startStageRect.height);
         const badge = embedEl.querySelector('.rc-embed-size-badge');
+        const activePointerId = e.pointerId;
+
+        if (activePointerId !== undefined && typeof handle.setPointerCapture === 'function') {
+          try { handle.setPointerCapture(activePointerId); } catch (_) {}
+        }
 
         embedEl.classList.add('is-embed-resizing', 'is-embed-active');
         document.body.classList.add('is-wa-dragging-reorder');
 
+        // Auto-switch Fit (contain) -> Fill (cover) when dragging height so vertical resize is immediate & free
+        if (dir.includes('s') && embedEl.dataset.embedFit === 'contain') {
+          embedEl.dataset.embedFit = 'cover';
+          embedEl.classList.remove('is-fit-contain');
+          embedEl.classList.add('is-fit-cover');
+          const fitBtn = embedEl.querySelector('.rc-embed-fit-btn');
+          if (fitBtn) {
+            fitBtn.textContent = 'Fill';
+            fitBtn.title = 'Fill (cover) — click for Fit';
+          }
+        }
+
         let latestW = Math.round((startW / parentW) * 100);
         let latestH = Math.round(startH);
+        let pendingX = startX;
+        let pendingY = startY;
+        let rafId = null;
 
         const updateBadge = () => {
           if (!badge) return;
@@ -675,57 +698,77 @@ export class RichComposer {
         };
         updateBadge();
 
-        const onMove = (ev) => {
-          const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
-          const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
-          if (cx === undefined || cy === undefined) return;
-          if (ev.cancelable) ev.preventDefault();
-
-          const dx = cx - startX;
-          const dy = cy - startY;
+        const applyFrame = () => {
+          rafId = null;
+          const dx = pendingX - startX;
+          const dy = pendingY - startY;
 
           // Width resize when in wrap mode (Left or Right)
           if (layout !== 'full' && (dir.includes('e') || dir.includes('w'))) {
             const deltaW = dir.includes('e') ? dx : -dx;
-            const nextPxW = Math.max(parentW * 0.22, Math.min(parentW * 0.86, startW + deltaW));
-            latestW = Math.max(22, Math.min(86, Math.round((nextPxW / parentW) * 100)));
+            const nextPxW = Math.max(parentW * 0.22, Math.min(parentW * 0.88, startW + deltaW));
+            latestW = Math.max(22, Math.min(88, Math.round((nextPxW / parentW) * 100)));
             embedEl.dataset.embedWidthPct = String(latestW);
             embedEl.style.setProperty('--embed-w', `${latestW}%`);
           }
 
-          // Height resize in ALL modes (Full, Left, Right)
+          // Height resize in ALL modes (Full, Left, Right) — smooth 120fps stage height control
           if (dir.includes('s')) {
-            const nextH = Math.max(68, Math.min(460, Math.round(startH + dy)));
+            const nextH = Math.max(56, Math.min(560, Math.round(startH + dy)));
             latestH = nextH;
             embedEl.dataset.embedHeightPx = String(latestH);
             embedEl.classList.add('has-custom-h');
+            embedEl.classList.toggle('is-tall-card', latestH >= 120);
             embedEl.style.setProperty('--embed-h', `${latestH}px`);
           }
 
           updateBadge();
         };
 
-        const finishResize = () => {
+        const onMove = (ev) => {
+          if (activePointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== activePointerId) return;
+          const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
+          const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
+          if (cx === undefined || cy === undefined) return;
+          if (ev.cancelable) ev.preventDefault();
+
+          pendingX = cx;
+          pendingY = cy;
+          if (typeof requestAnimationFrame === 'function') {
+            if (!rafId) rafId = requestAnimationFrame(applyFrame);
+          } else {
+            applyFrame();
+          }
+        };
+
+        const finishResize = (ev) => {
+          if (activePointerId !== undefined && ev?.pointerId !== undefined && ev.pointerId !== activePointerId) return;
+          if (rafId && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+            applyFrame();
+          }
+          if (activePointerId !== undefined && typeof handle.releasePointerCapture === 'function') {
+            try { handle.releasePointerCapture(activePointerId); } catch (_) {}
+          }
+          handle.removeEventListener('pointermove', onMove);
+          handle.removeEventListener('pointerup', finishResize);
+          handle.removeEventListener('pointercancel', finishResize);
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', finishResize);
           window.removeEventListener('pointercancel', finishResize);
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', finishResize);
-          window.removeEventListener('touchmove', onMove);
-          window.removeEventListener('touchend', finishResize);
           embedEl.classList.remove('is-embed-resizing');
           document.body.classList.remove('is-wa-dragging-reorder');
           this._pushHistory();
           this.onChange(this.getValue());
         };
 
+        handle.addEventListener('pointermove', onMove, { passive: false });
+        handle.addEventListener('pointerup', finishResize);
+        handle.addEventListener('pointercancel', finishResize);
         window.addEventListener('pointermove', onMove, { passive: false });
         window.addEventListener('pointerup', finishResize);
         window.addEventListener('pointercancel', finishResize);
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', finishResize);
-        window.addEventListener('touchmove', onMove, { passive: false });
-        window.addEventListener('touchend', finishResize);
       });
     });
   }

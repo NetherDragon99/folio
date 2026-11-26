@@ -439,10 +439,11 @@ export function renderRichMessageHtml(text, options = {}) {
       }
       const styleAttr = styleParts.length > 0 ? ` style="${styleParts.join(';')}"` : '';
       const customHCls = embed.heightPx ? ' has-custom-h' : '';
+      const tallCardCls = (embed.heightPx && Number(embed.heightPx) >= 120) ? ' is-tall-card' : '';
       segments.push({
         type: 'block',
         html:
-          `<div class="wa-inline-embed wa-embed-${embed.kind} wa-embed-layout-${embed.layout}${customHCls}" ` +
+          `<div class="wa-inline-embed wa-embed-${embed.kind} wa-embed-layout-${embed.layout}${customHCls}${tallCardCls}" ` +
           `data-embed-kind="${escapeAttr(embed.kind)}" data-embed-media-id="${escapeAttr(embed.mediaId)}" ` +
           `data-embed-layout="${escapeAttr(embed.layout)}" data-embed-fit="${escapeAttr(embed.fit || 'cover')}" ` +
           `data-embed-label="${escapeAttr(fallbackTitle)}"${styleAttr}>` +

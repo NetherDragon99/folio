@@ -58,6 +58,8 @@ export class ChatView {
     this.currentSearchMatchIndex = -1;
     this.selectedMessageIds = new Set();
     this.isSelectionMode = false;
+    this._selectionMenuExpanded = false;
+    this._selectionCascadePending = false;
     this.replyingTo = null;
     this.editingMessage = null;
     this.linkingReplyForMsg = null;
@@ -615,13 +617,39 @@ export class ChatView {
     const overflowMenu = this.container.querySelector('#selection-overflow-menu');
     overflowBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      const isVisible = overflowMenu.style.display !== 'none';
-      overflowMenu.style.display = isVisible ? 'none' : 'block';
+      if (!overflowMenu) return;
+      if (this._isSelectionRailMode()) {
+        this._selectionMenuExpanded = !this._selectionMenuExpanded;
+        overflowMenu.style.display = 'flex';
+        overflowMenu.classList.add('is-rail-mode', 'is-rail-open');
+        overflowMenu.classList.toggle('is-rail-expanded', this._selectionMenuExpanded);
+        overflowBtn.classList.toggle('is-expanded', this._selectionMenuExpanded);
+        overflowBtn.setAttribute('aria-expanded', this._selectionMenuExpanded ? 'true' : 'false');
+        overflowBtn.title = this._selectionMenuExpanded ? 'Collapse labels' : 'Expand labels';
+      } else {
+        const isVisible = overflowMenu.style.display !== 'none';
+        overflowMenu.style.display = isVisible ? 'none' : 'block';
+        overflowMenu.classList.toggle('is-classic-open', !isVisible);
+        overflowBtn.setAttribute('aria-expanded', !isVisible ? 'true' : 'false');
+      }
     });
 
     document.addEventListener('click', (e) => {
-      if (overflowMenu && overflowMenu.style.display !== 'none' && !e.target.closest('#selection-overflow-wrap')) {
+      if (!overflowMenu || !this.isSelectionMode) return;
+      if (e.target.closest('#selection-overflow-wrap')) return;
+      if (this._isSelectionRailMode()) {
+        // Keep slim icon-only rail open while in selection mode; collapse labels if expanded
+        if (this._selectionMenuExpanded) {
+          this._selectionMenuExpanded = false;
+          overflowMenu.classList.remove('is-rail-expanded');
+          overflowBtn?.classList.remove('is-expanded');
+          overflowBtn?.setAttribute('aria-expanded', 'false');
+          if (overflowBtn) overflowBtn.title = 'Expand labels';
+        }
+      } else if (overflowMenu.style.display !== 'none') {
         overflowMenu.style.display = 'none';
+        overflowMenu.classList.remove('is-classic-open');
+        overflowBtn?.setAttribute('aria-expanded', 'false');
       }
     });
 
@@ -3444,47 +3472,14 @@ export class ChatView {
       seenKeys.add(`m:${msg.id}`);
     }
 
-    // Also include inline embedded media inside msg.text
-    const embedRe = /\[embed:(image|audio|file|whiteboard):([^:\]\s]+):([^\]:]*?)(?::[^\]]*)?\]/g;
-    let match;
-    while ((match = embedRe.exec(msg.text || '')) !== null) {
-      const kind = match[1];
-      const mediaId = match[2];
-      const label = match[3] || kind;
-      if (!seenKeys.has(`e:${mediaId}`)) {
-        seenKeys.add(`e:${mediaId}`);
-        items.push({
-          msgId: msg.id,
-          mediaId,
-          mediaName: label,
-          mediaType: kind,
-          isAlbumMember: false,
-          isInlineEmbed: true
-        });
-      }
-    }
+    // Inline embedded media ([embed:...]) stays strictly inside the message composer
+    // and is NOT duplicated as external removable chips in the edit banner.
     return items;
   }
 
-  _syncEditingMediaChipsFromComposer(markup = '') {
-    if (!this.editingMessage || !Array.isArray(this.editingMediaItems)) return;
-    const inlineIds = new Set();
-    const embedRe = /\[embed:(image|audio|file|whiteboard):([^:\]\s]+):/g;
-    let m;
-    while ((m = embedRe.exec(markup || '')) !== null) {
-      inlineIds.add(String(m[2]));
-    }
-    let changed = false;
-    this.editingMediaItems = this.editingMediaItems.filter((item) => {
-      if (item.isInlineEmbed && !inlineIds.has(String(item.mediaId))) {
-        changed = true;
-        return false;
-      }
-      return true;
-    });
-    if (changed) {
-      this.renderEditBanner();
-    }
+  _syncEditingMediaChipsFromComposer() {
+    // External edit-banner chips track standalone/album attachments only;
+    // inline embedded media is edited & deleted directly inside RichComposer.
   }
 
   // --- Message Editing via Bottom Composer (Preserves Draft & Reply) ---
@@ -3619,16 +3614,6 @@ export class ChatView {
         const [removed] = this.editingMediaItems.splice(idx, 1);
         if (!this.editingRemovedMediaItems) this.editingRemovedMediaItems = [];
         this.editingRemovedMediaItems.push(removed);
-
-        if (removed.isInlineEmbed && removed.mediaId && this.richComposer?.el) {
-          const escId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(String(removed.mediaId)) : String(removed.mediaId);
-          this.richComposer.el.querySelectorAll(`.rc-block[data-block="embed"][data-embed-media-id="${escId}"]`).forEach((emb) => {
-            emb.remove();
-          });
-          this.richComposer._ensureAtLeastOneBlock();
-          this.richComposer._pushHistory();
-          this._updateInputLayout?.();
-        }
         this.renderEditBanner();
       });
     });
@@ -3809,9 +3794,26 @@ export class ChatView {
   }
 
   // --- Message Multi-Selection System ---
+  _isSelectionRailMode() {
+    try {
+      return localStorage.getItem('folio_selection_rail_mode') !== 'classic';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  _setSelectionRailMode(enabled) {
+    try {
+      localStorage.setItem('folio_selection_rail_mode', enabled ? 'rail' : 'classic');
+    } catch (_) {}
+  }
+
   enterSelectionMode(initialMsgId = null, rowEl = null) {
+    const wasSelectionMode = this.isSelectionMode;
     this.isSelectionMode = true;
     this._allowEmptySelection = !initialMsgId;
+    this._selectionMenuExpanded = false;
+    this._selectionCascadePending = !wasSelectionMode;
     if (this.scroller) this.scroller.selectionMode = true;
     this.selectedMessageIds.clear();
     if (initialMsgId) {
@@ -3854,6 +3856,7 @@ export class ChatView {
     const countEl = this.container.querySelector('#chat-select-count');
     const toolsBar = this.container.querySelector('#selection-tools-bar');
     const overflowWrap = this.container.querySelector('#selection-overflow-wrap');
+    const overflowBtn = this.container.querySelector('#btn-selection-overflow');
     const overflowMenu = this.container.querySelector('#selection-overflow-menu');
 
     if (!selectHeader || !toolsBar) return;
@@ -3861,11 +3864,17 @@ export class ChatView {
     if (defaultHeader) defaultHeader.style.display = 'none';
     selectHeader.style.display = 'flex';
     if (countEl) countEl.textContent = `${this.selectedMessageIds.size}`;
-    if (overflowMenu) overflowMenu.style.display = 'none';
+    if (overflowMenu && !this._isSelectionRailMode()) {
+      overflowMenu.style.display = 'none';
+    }
 
     if (this.selectedMessageIds.size === 0) {
       toolsBar.innerHTML = `<span class="selection-empty-hint">Tap messages to select</span>`;
       if (overflowWrap) overflowWrap.style.display = 'none';
+      if (overflowMenu) {
+        overflowMenu.style.display = 'none';
+        overflowMenu.classList.remove('is-rail-mode', 'is-rail-open', 'is-rail-expanded', 'is-rail-cascading', 'is-classic-open');
+      }
       return;
     }
 
@@ -4182,63 +4191,135 @@ export class ChatView {
     const leftWidth = 100; // width of [← back] [count] + gap
     const btnWidth = 44;   // width per tool icon button
     const availableWidth = Math.max(0, headerWidth - leftWidth - 12);
+    const isRailMode = this._isSelectionRailMode();
+    const shouldCascade = Boolean(this._selectionCascadePending);
+    this._selectionCascadePending = false;
 
     toolsBar.innerHTML = '';
-    overflowMenu.innerHTML = '';
+    if (overflowMenu) overflowMenu.innerHTML = '';
+
+    const buildToolBtn = (tool, idx, total) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `selection-tool-btn ${tool.danger ? 'danger-tool' : ''}${shouldCascade ? ' is-cascade-in' : ''}`;
+      // Stagger from right (arrow side) toward left sequentially
+      const revIdx = Math.max(0, total - 1 - idx);
+      btn.style.setProperty('--stagger-idx', String(revIdx));
+      btn.title = tool.label;
+      btn.setAttribute('aria-label', tool.label);
+      btn.innerHTML = tool.icon;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.reactionBar?.hide();
+        tool.action();
+      });
+      return btn;
+    };
 
     if (tools.length * btnWidth <= availableWidth) {
-      // All tools fit directly in the toolbar
+      // All tools fit directly in the toolbar (no side rail needed)
       if (overflowWrap) overflowWrap.style.display = 'none';
-      tools.forEach((tool) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `selection-tool-btn ${tool.danger ? 'danger-tool' : ''}`;
-        btn.title = tool.label;
-        btn.setAttribute('aria-label', tool.label);
-        btn.innerHTML = tool.icon;
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this.reactionBar?.hide();
-          tool.action();
-        });
-        toolsBar.appendChild(btn);
+      if (overflowMenu) {
+        overflowMenu.style.display = 'none';
+        overflowMenu.classList.remove('is-rail-mode', 'is-rail-open', 'is-rail-expanded', 'is-rail-cascading', 'is-classic-open');
+      }
+      tools.forEach((tool, idx) => {
+        toolsBar.appendChild(buildToolBtn(tool, idx, tools.length));
       });
     } else {
-      // Not all tools fit: leave space for 3-dots overflow button (44px)
+      // Not all tools fit: leave space for overflow arrow / 3-dots button (44px)
       const maxVisible = Math.max(1, Math.floor((availableWidth - 44) / btnWidth));
       const visibleTools = tools.slice(0, maxVisible);
       const overflowTools = tools.slice(maxVisible);
 
-      visibleTools.forEach((tool) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `selection-tool-btn ${tool.danger ? 'danger-tool' : ''}`;
-        btn.title = tool.label;
-        btn.setAttribute('aria-label', tool.label);
-        btn.innerHTML = tool.icon;
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this.reactionBar?.hide();
-          tool.action();
-        });
-        toolsBar.appendChild(btn);
+      visibleTools.forEach((tool, idx) => {
+        toolsBar.appendChild(buildToolBtn(tool, idx, visibleTools.length));
       });
 
-      overflowTools.forEach((tool) => {
-        const item = document.createElement('div');
-        item.className = `selection-overflow-item ${tool.danger ? 'danger-item' : ''}`;
-        item.innerHTML = `
-          <span class="selection-overflow-item-icon">${tool.icon}</span>
-          <span>${tool.label}</span>
-        `;
-        item.addEventListener('click', (e) => {
-          e.stopPropagation();
-          overflowMenu.style.display = 'none';
-          this.reactionBar?.hide();
-          tool.action();
+      if (overflowMenu) {
+        overflowTools.forEach((tool, idx) => {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = `selection-overflow-item ${tool.danger ? 'danger-item' : ''}${shouldCascade && isRailMode ? ' is-rail-item-drop' : ''}`;
+          item.style.setProperty('--item-idx', String(idx));
+          item.title = tool.label;
+          item.setAttribute('aria-label', tool.label);
+          item.innerHTML = `
+            <span class="selection-overflow-item-icon">${tool.icon}</span>
+            <span class="selection-overflow-item-label">${tool.label}</span>
+          `;
+          item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!this._isSelectionRailMode()) {
+              overflowMenu.style.display = 'none';
+              overflowMenu.classList.remove('is-classic-open');
+            }
+            this.reactionBar?.hide();
+            tool.action();
+          });
+          overflowMenu.appendChild(item);
         });
-        overflowMenu.appendChild(item);
-      });
+
+        // Subtle divider + bottom mode toggle button (Quick Icon Rail <-> Classic 3-Dots)
+        const divider = document.createElement('div');
+        divider.className = 'selection-overflow-divider';
+        overflowMenu.appendChild(divider);
+
+        const modeToggle = document.createElement('button');
+        modeToggle.type = 'button';
+        modeToggle.id = 'btn-toggle-selection-rail-mode';
+        modeToggle.className = `selection-overflow-item selection-overflow-mode-toggle${shouldCascade && isRailMode ? ' is-rail-item-drop' : ''}`;
+        modeToggle.style.setProperty('--item-idx', String(overflowTools.length));
+        const toggleLabel = isRailMode ? 'Classic 3-dots menu' : 'Quick icon rail';
+        const toggleIcon = isRailMode ? Icons.moreVert('', 18) : Icons.chevronRight('', 18);
+        modeToggle.title = isRailMode ? 'Switch to classic 3-dots menu' : 'Switch to quick icon rail';
+        modeToggle.setAttribute('aria-label', modeToggle.title);
+        modeToggle.innerHTML = `
+          <span class="selection-overflow-item-icon">${toggleIcon}</span>
+          <span class="selection-overflow-item-label">${toggleLabel}</span>
+        `;
+        modeToggle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const nextRail = !this._isSelectionRailMode();
+          this._setSelectionRailMode(nextRail);
+          this._selectionMenuExpanded = false;
+          this._selectionCascadePending = nextRail;
+          this.updateMessageSelectionBar();
+          Toast.show(nextRail ? 'Quick icon rail enabled' : 'Classic 3-dots menu enabled');
+        });
+        overflowMenu.appendChild(modeToggle);
+      }
+
+      if (overflowBtn) {
+        if (isRailMode) {
+          overflowBtn.innerHTML = Icons.chevronRight('', 20);
+          overflowBtn.classList.add('is-rail-arrow');
+          overflowBtn.classList.toggle('is-morph-in', shouldCascade);
+          overflowBtn.classList.toggle('is-expanded', this._selectionMenuExpanded);
+          overflowBtn.title = this._selectionMenuExpanded ? 'Collapse labels' : 'Expand labels';
+          overflowBtn.setAttribute('aria-label', overflowBtn.title);
+          overflowBtn.setAttribute('aria-expanded', this._selectionMenuExpanded ? 'true' : 'false');
+        } else {
+          overflowBtn.innerHTML = Icons.moreVert('', 20);
+          overflowBtn.classList.remove('is-rail-arrow', 'is-morph-in', 'is-expanded');
+          overflowBtn.title = 'More options';
+          overflowBtn.setAttribute('aria-label', 'More options');
+          overflowBtn.setAttribute('aria-expanded', 'false');
+        }
+      }
+
+      if (overflowMenu) {
+        if (isRailMode) {
+          overflowMenu.classList.remove('is-classic-open');
+          overflowMenu.classList.add('is-rail-mode', 'is-rail-open');
+          overflowMenu.classList.toggle('is-rail-expanded', this._selectionMenuExpanded);
+          overflowMenu.classList.toggle('is-rail-cascading', shouldCascade);
+          overflowMenu.style.display = 'flex';
+        } else {
+          overflowMenu.classList.remove('is-rail-mode', 'is-rail-open', 'is-rail-expanded', 'is-rail-cascading', 'is-classic-open');
+          overflowMenu.style.display = 'none';
+        }
+      }
 
       if (overflowWrap) overflowWrap.style.display = 'flex';
     }
@@ -4246,17 +4327,28 @@ export class ChatView {
 
   exitSelectionMode() {
     this.isSelectionMode = false;
+    this._selectionMenuExpanded = false;
+    this._selectionCascadePending = false;
     if (this.scroller) this.scroller.selectionMode = false;
     this.selectedMessageIds.clear();
     this.reactionBar?.hide();
 
     const defaultHeader = this.container.querySelector('#chat-default-header');
     const selectHeader = this.container.querySelector('#chat-selection-header');
+    const overflowBtn = this.container.querySelector('#btn-selection-overflow');
     const overflowMenu = this.container.querySelector('#selection-overflow-menu');
 
     if (defaultHeader) defaultHeader.style.display = 'flex';
     if (selectHeader) selectHeader.style.display = 'none';
-    if (overflowMenu) overflowMenu.style.display = 'none';
+    if (overflowBtn) {
+      overflowBtn.classList.remove('is-rail-arrow', 'is-morph-in', 'is-expanded');
+      overflowBtn.innerHTML = Icons.moreVert('', 20);
+      overflowBtn.setAttribute('aria-expanded', 'false');
+    }
+    if (overflowMenu) {
+      overflowMenu.style.display = 'none';
+      overflowMenu.classList.remove('is-rail-mode', 'is-rail-open', 'is-rail-expanded', 'is-rail-cascading', 'is-classic-open');
+    }
 
     this.container.querySelectorAll('.msg-row.is-msg-selected').forEach((r) => {
       r.classList.remove('is-msg-selected');

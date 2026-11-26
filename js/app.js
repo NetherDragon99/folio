@@ -32,8 +32,8 @@ import { backgroundTasks } from './utils/background-tasks.js';
 import { appendFolioShowcaseToChat } from './utils/demo-generator.js';
 
 // Application Version Constant
-window.APP_VERSION = '3.0.2';
-window.APP_CACHE_NAME = 'folio-v3.0.2';
+window.APP_VERSION = '3.0.3';
+window.APP_CACHE_NAME = 'folio-v3.0.3';
 
 // Unified PWA Installation Detection & Prompt State
 window.deferredInstallPrompt = null;

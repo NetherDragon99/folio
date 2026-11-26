@@ -1,6 +1,6 @@
-// Folio Service Worker v3.0.2
-const APP_VERSION = '3.0.2';
-const CACHE_NAME = 'folio-v3.0.2';
+// Folio Service Worker v3.0.3
+const APP_VERSION = '3.0.3';
+const CACHE_NAME = 'folio-v3.0.3';
 
 const APP_SHELL_FILES = [
   './',
