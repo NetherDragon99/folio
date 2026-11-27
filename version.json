@@ -1,5 +1,5 @@
 {
-  "version": "3.0.4",
-  "cacheName": "folio-v3.0.4",
-  "notes": "Folio v3.0.4: Eliminate blank pre-wrap gaps in inline embeds, Selection Mode left-arrow flip with in-place classic toggle & wider centered overflow labels, durable ArrayBuffer + Cache Storage + per-item WhatsAppBackupDB media persistence, silent legacy migration, and one-tap Restore / Re-link for missing legacy media."
+  "version": "3.0.5",
+  "cacheName": "folio-v3.0.5",
+  "notes": "Folio v3.0.5: True Word-style wrapping of text, bullets, numbers, and checklists around & underneath floated media + razor-tight 2px vertical & 8px horizontal inline embed margins with zero blank-line gaps."
 }

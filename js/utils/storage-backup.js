@@ -375,7 +375,7 @@ class StorageBackupManager {
       });
 
       const payload = {
-        version: snapshot.version || '3.0.4',
+        version: snapshot.version || '3.0.5',
         timestamp: snapshot.timestamp || Date.now(),
         chats: snapshot.chats || [],
         messages: compactMessages,
@@ -401,7 +401,7 @@ class StorageBackupManager {
         // Fallback: save at least chats, settings, calls, filters and recent messages
         const recentMessages = (snapshot.messages || []).slice(-300);
         const minimalPayload = {
-          version: snapshot.version || '3.0.4',
+          version: snapshot.version || '3.0.5',
           timestamp: snapshot.timestamp || Date.now(),
           chats: snapshot.chats || [],
           messages: recentMessages,
@@ -498,7 +498,7 @@ class StorageBackupManager {
       });
 
       const snapshot = {
-        version: '3.0.4',
+        version: '3.0.5',
         timestamp: Date.now(),
         chatCount: chats.length,
         messageCount: messages.length,

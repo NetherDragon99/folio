@@ -2226,12 +2226,12 @@ export class VirtualMessageScroller {
 
       if (kind === 'image' || kind === 'whiteboard') {
         const isWb = kind === 'whiteboard' || Boolean(mediaItem.isWhiteboard || mediaItem.whiteboardData);
-        el.innerHTML = `
-          <div class="wa-embed-img-wrap">
-            <img src="${url}" alt="${this.escapeHtml(label || 'Photo')}" class="wa-embed-img" loading="lazy" />
-            ${isWb ? `<button type="button" class="wa-embed-wb-edit-badge" title="Edit Whiteboard">${Icons.edit('', 13)} Edit</button>` : ''}
-          </div>
-        `;
+        // Single-line compact HTML (zero whitespace text nodes inside white-space:pre-wrap parent)
+        el.innerHTML =
+          `<div class="wa-embed-img-wrap">` +
+            `<img src="${url}" alt="${this.escapeHtml(label || 'Photo')}" class="wa-embed-img" loading="lazy" />` +
+            (isWb ? `<button type="button" class="wa-embed-wb-edit-badge" title="Edit Whiteboard">${Icons.edit('', 13)} Edit</button>` : '') +
+          `</div>`;
         const imgEl = el.querySelector('.wa-embed-img');
         if (imgEl) {
           imgEl.addEventListener('load', () => this.scheduleTreeConnectorRedraw());
@@ -2290,16 +2290,15 @@ export class VirtualMessageScroller {
         el.appendChild(card);
       } else {
         const sizeStr = mediaItem.size ? db.formatBytes(mediaItem.size) : '';
-        el.innerHTML = `
-          <a href="${url}" download="${this.escapeHtml(mediaItem.filename || label || 'file')}" class="wa-embed-file-card">
-            <span class="wa-embed-file-icon">${Icons.documentIcon('', 20)}</span>
-            <span class="wa-embed-file-meta">
-              <strong>${this.escapeHtml(mediaItem.filename || label || 'Document')}</strong>
-              ${sizeStr ? `<small>${this.escapeHtml(sizeStr)}</small>` : ''}
-            </span>
-            <span class="wa-embed-file-dl">${Icons.download('', 16)}</span>
-          </a>
-        `;
+        el.innerHTML =
+          `<a href="${url}" download="${this.escapeHtml(mediaItem.filename || label || 'file')}" class="wa-embed-file-card">` +
+            `<span class="wa-embed-file-icon">${Icons.documentIcon('', 20)}</span>` +
+            `<span class="wa-embed-file-meta">` +
+              `<strong>${this.escapeHtml(mediaItem.filename || label || 'Document')}</strong>` +
+              (sizeStr ? `<small>${this.escapeHtml(sizeStr)}</small>` : '') +
+            `</span>` +
+            `<span class="wa-embed-file-dl">${Icons.download('', 16)}</span>` +
+          `</a>`;
         el.querySelector('a')?.addEventListener('click', (e) => {
           if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) {
             e.preventDefault();

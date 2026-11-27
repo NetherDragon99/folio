@@ -25,7 +25,7 @@ export class SettingsView {
       let enterToSend = localStorage.getItem('wa_enter_to_send') !== 'false';
       let persistenceInfo = { isPersisted: false };
       let backupStatus = { hasBackup: false, lastStats: null };
-      const appVersion = window.APP_VERSION || '3.0.4';
+      const appVersion = window.APP_VERSION || '3.0.5';
       const cacheStatus = window.__waCacheStatus || null;
       const updateState = (window.app && typeof window.app.getUpdateState === 'function')
         ? window.app.getUpdateState()
@@ -589,7 +589,7 @@ export class SettingsView {
     });
 
     // Check for Updates, Background Download Progress & Restart to Update
-    const appVersion = window.APP_VERSION || '3.0.4';
+    const appVersion = window.APP_VERSION || '3.0.5';
     const updateRow = this.container.querySelector('#row-check-updates');
     const updateSubEl = this.container.querySelector('#settings-update-status-sub');
     const updateReadyCard = this.container.querySelector('#settings-update-ready-card');

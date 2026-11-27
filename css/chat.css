@@ -1440,10 +1440,8 @@
 .rc-block[data-block="ul"],
 .rc-block[data-block="ol"],
 .rc-block[data-block="check"] {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding-left: calc(var(--indent, 0) * 18px);
+  display: block;
+  padding-inline-start: calc(var(--indent, 0) * 18px);
 }
 
 .rc-block[data-indent="1"] { --indent: 1; }
@@ -1452,9 +1450,10 @@
 
 .rc-ul-marker,
 .rc-ol-marker {
+  display: inline-block;
   color: var(--app-accent);
   font-weight: 700;
-  flex-shrink: 0;
+  margin-inline-end: 7px;
   user-select: none;
 }
 
@@ -1466,8 +1465,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  margin-top: 2px;
+  vertical-align: -3px;
+  margin-inline-end: 7px;
   cursor: pointer;
   user-select: none;
   transition: background-color 0.15s ease, border-color 0.15s ease;
@@ -1492,8 +1491,7 @@
 }
 
 .rc-item-body {
-  flex: 1;
-  min-width: 0;
+  display: inline;
 }
 
 .rc-spoiler-edit {
@@ -4301,11 +4299,9 @@
 
 .wa-list-row,
 .wa-check-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin: 2px 0;
-  padding-left: calc(var(--row-indent, 0) * 16px);
+  display: block;
+  margin: 1px 0;
+  padding-inline-start: calc(var(--row-indent, 0) * 16px);
   position: relative;
 }
 
@@ -4317,7 +4313,7 @@
 .wa-check-row[data-indent]:not([data-indent="0"])::before {
   content: '';
   position: absolute;
-  left: calc(var(--row-indent, 1) * 16px - 10px);
+  inset-inline-start: calc(var(--row-indent, 1) * 16px - 10px);
   top: 0;
   bottom: 0;
   width: 1.5px;
@@ -4331,10 +4327,11 @@
 }
 
 .wa-list-marker {
+  display: inline-block;
   color: var(--app-accent);
   font-weight: 700;
-  flex-shrink: 0;
-  min-width: 14px;
+  min-width: 12px;
+  margin-inline-end: 6px;
 }
 
 .wa-list-marker.is-bullet {
@@ -4408,16 +4405,12 @@
 }
 
 .wa-list-content {
-  flex: 1;
-  min-width: 0;
+  display: inline;
 }
 
 .wa-check-label {
-  display: inline-flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: block;
   cursor: pointer;
-  width: 100%;
 }
 
 .wa-check-input {
@@ -4436,8 +4429,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  margin-top: 2px;
+  vertical-align: -3px;
+  margin-inline-end: 7px;
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
@@ -4459,8 +4452,7 @@
 }
 
 .wa-check-text {
-  flex: 1;
-  min-width: 0;
+  display: inline;
   transition: opacity 0.15s ease;
 }
 
@@ -5033,11 +5025,10 @@
   clear: both;
 }
 
-/* Allow adjacent list/checklist/fold blocks to flow gracefully alongside floated embeds */
+/* Framed blocks sit neatly beside floated embeds; lists & checklists wrap freely around & underneath */
 .chat-rich-editor .rc-fold,
-.chat-rich-editor .rc-ul,
-.chat-rich-editor .rc-ol,
-.chat-rich-editor .rc-check {
+.chat-rich-editor .rc-block[data-block="codeblock"],
+.chat-rich-editor .rc-block[data-block="quote"] {
   overflow: hidden;
 }
 
@@ -5072,14 +5063,14 @@
 .rc-embed.is-layout-left {
   float: left;
   width: var(--embed-w, 46%);
-  margin: 1px 6px 2px 0;
+  margin: 2px 8px 2px 0;
   clear: none;
 }
 
 .rc-embed.is-layout-right {
   float: right;
   width: var(--embed-w, 46%);
-  margin: 1px 0 2px 6px;
+  margin: 2px 0 2px 8px;
   clear: none;
 }
 
@@ -5610,9 +5601,10 @@ body.is-wa-dragging-reorder {
   clear: both;
 }
 
+/* Framed blocks sit neatly beside floated embeds; lists & checklists wrap freely around & underneath */
 .msg-text-body .wa-fold-block,
-.msg-text-body .wa-list-row,
-.msg-text-body .wa-check-row {
+.msg-text-body .chat-code-block,
+.msg-text-body .wa-md-quote {
   overflow: hidden;
 }
 
@@ -5622,6 +5614,8 @@ body.is-wa-dragging-reorder {
   overflow: hidden;
   position: relative;
   box-sizing: border-box;
+  white-space: normal;
+  line-height: normal;
 }
 
 .wa-inline-embed.wa-embed-layout-full {
@@ -5632,13 +5626,13 @@ body.is-wa-dragging-reorder {
 .wa-inline-embed.wa-embed-layout-left {
   float: left;
   width: var(--embed-w, min(48%, 220px));
-  margin: 1px 6px 2px 0;
+  margin: 2px 8px 2px 0;
 }
 
 .wa-inline-embed.wa-embed-layout-right {
   float: right;
   width: var(--embed-w, min(48%, 220px));
-  margin: 1px 0 2px 6px;
+  margin: 2px 0 2px 8px;
 }
 
 .wa-embed-img-wrap {
@@ -5646,6 +5640,8 @@ body.is-wa-dragging-reorder {
   border-radius: 10px;
   overflow: hidden;
   background: transparent;
+  white-space: normal;
+  line-height: 0;
 }
 
 .wa-inline-embed.has-custom-h:not([data-embed-fit="contain"]) .wa-embed-img-wrap {
@@ -5788,6 +5784,8 @@ body.is-wa-dragging-reorder {
   background: rgba(0, 0, 0, 0.18);
   color: inherit;
   text-decoration: none;
+  white-space: normal;
+  line-height: 1.3;
 }
 
 [data-theme="light"] .wa-embed-file-card {
