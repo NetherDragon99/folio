@@ -4,6 +4,7 @@ import { assetUrl } from './config/base-path.js';
 
 const DB_NAME = 'WhatsAppCloneDB';
 const DB_VERSION = 1;
+const USER_MEDIA_CACHE_NAME = 'folio-user-media-v1';
 
 class Database {
   constructor() {
@@ -13,6 +14,7 @@ class Database {
     this._isBackfillingCalls = false;
     this._missingMediaMisses = new Set();
     this._demoZipEntriesPromise = null;
+    this._legacyMediaMigrated = false;
   }
 
   generateUUID() {
@@ -541,24 +543,143 @@ class Database {
     });
   }
 
-  // --- Media Blobs CRUD ---
+  // --- Media Blobs CRUD (Persistent ArrayBuffer + Cache Storage Mirror) ---
+  _mediaCacheRequestUrl(id) {
+    return `https://folio-media.local/${encodeURIComponent(String(id))}`;
+  }
+
+  async _mirrorMediaToCache(id, bytes, mimeType = 'application/octet-stream') {
+    if (!id || !bytes || typeof caches === 'undefined' || typeof Response === 'undefined') return false;
+    try {
+      const cache = await caches.open(USER_MEDIA_CACHE_NAME);
+      const copy = bytes instanceof ArrayBuffer ? bytes.slice(0) : bytes;
+      await cache.put(
+        this._mediaCacheRequestUrl(id),
+        new Response(copy, {
+          headers: {
+            'Content-Type': mimeType || 'application/octet-stream',
+            'Cache-Control': 'max-age=31536000'
+          }
+        })
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async _readMediaFromCache(id, fallbackMime = 'application/octet-stream') {
+    if (!id || typeof caches === 'undefined') return null;
+    try {
+      const cache = await caches.open(USER_MEDIA_CACHE_NAME);
+      const resp = await cache.match(this._mediaCacheRequestUrl(id));
+      if (!resp) return null;
+      const bytes = await resp.arrayBuffer();
+      if (!bytes || bytes.byteLength === 0) return null;
+      const mimeType = resp.headers.get('Content-Type') || fallbackMime || 'application/octet-stream';
+      const blob = typeof Blob !== 'undefined' ? new Blob([bytes], { type: mimeType }) : null;
+      return { bytes, blob, mimeType, size: bytes.byteLength };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async _materializeMediaItem(mediaItem) {
+    if (!mediaItem || typeof mediaItem !== 'object') return mediaItem;
+    const item = { ...mediaItem };
+    if (!item.timestamp) item.timestamp = Date.now();
+    const mimeType = item.mimeType || item.blob?.type || this._inferMimeFromFilename(item.filename, item.type);
+    item.mimeType = mimeType;
+
+    // Materialize volatile File/Blob handles into durable standalone ArrayBuffer bytes BEFORE IDB write
+    if ((!item.bytes || !(item.bytes instanceof ArrayBuffer) || item.bytes.byteLength === 0) && item.blob && typeof item.blob.arrayBuffer === 'function') {
+      try {
+        const buf = await item.blob.arrayBuffer();
+        if (buf && buf.byteLength > 0) {
+          item.bytes = buf;
+          item.size = buf.byteLength;
+          if (typeof Blob !== 'undefined') {
+            item.blob = new Blob([buf], { type: mimeType });
+          }
+        }
+      } catch (_) {
+        // Keep existing blob if arrayBuffer read isn't supported in mock environment
+      }
+    } else if (item.bytes && item.bytes instanceof ArrayBuffer && item.bytes.byteLength > 0) {
+      if (!item.size) item.size = item.bytes.byteLength;
+      if (!item.blob || item.blob.size === 0 || (typeof File !== 'undefined' && item.blob instanceof File)) {
+        if (typeof Blob !== 'undefined') {
+          item.blob = new Blob([item.bytes], { type: mimeType });
+        }
+      }
+    }
+    return item;
+  }
+
+  _hydrateMediaRecord(rec) {
+    if (!rec) return null;
+    const mimeType = rec.mimeType || rec.blob?.type || this._inferMimeFromFilename(rec.filename, rec.type);
+    const hasBytes = rec.bytes && (rec.bytes instanceof ArrayBuffer || ArrayBuffer.isView(rec.bytes));
+    const byteLen = hasBytes ? (rec.bytes.byteLength || 0) : 0;
+    if (byteLen > 0 && typeof Blob !== 'undefined') {
+      const isVolatileFile = typeof File !== 'undefined' && rec.blob instanceof File;
+      if (!rec.blob || rec.blob.size === 0 || isVolatileFile) {
+        rec.blob = new Blob([rec.bytes], { type: mimeType });
+      }
+      if (!rec.size) rec.size = byteLen;
+    }
+    return rec;
+  }
+
+  async _isBlobReadable(blob) {
+    if (!blob) return false;
+    if (blob.size === 0) return false;
+    if (typeof blob.slice === 'function') {
+      try {
+        const head = blob.slice(0, 1);
+        if (typeof head.arrayBuffer === 'function') {
+          await head.arrayBuffer();
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  _clearMissForItem(item) {
+    if (!item) return;
+    const base = String(item.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase();
+    for (const k of Array.from(this._missingMediaMisses)) {
+      if ((item.id && k.startsWith(`${item.id}::`)) || (base && k.endsWith(`::${base}`))) {
+        this._missingMediaMisses.delete(k);
+      }
+    }
+  }
+
   async saveMedia(mediaItem) {
     await this.init();
-    if (mediaItem && !mediaItem.timestamp) {
-      mediaItem.timestamp = Date.now();
-    }
-    if (mediaItem && mediaItem.id) {
-      this._missingMediaMisses.delete(String(mediaItem.id));
-    }
-    return new Promise((resolve, reject) => {
+    // Critical: materialize bytes BEFORE opening IDB transaction so tx never auto-commits
+    const prepared = await this._materializeMediaItem(mediaItem);
+    this._clearMissForItem(prepared);
+    const saved = await new Promise((resolve, reject) => {
       const tx = this.db.transaction('media', 'readwrite');
-      tx.objectStore('media').put(mediaItem);
+      tx.objectStore('media').put(prepared);
       tx.oncomplete = () => {
         storageBackup.scheduleBackup(this, 1500);
-        resolve(mediaItem);
+        resolve(prepared);
       };
       tx.onerror = () => reject(tx.error);
     });
+    // Asynchronous durable mirrors (Cache Storage + per-item WhatsAppBackupDB)
+    if (saved && saved.id && saved.bytes) {
+      this._mirrorMediaToCache(saved.id, saved.bytes, saved.mimeType).catch(() => {});
+    }
+    if (saved && saved.id) {
+      storageBackup.saveMediaItemBackup(saved).catch(() => {});
+    }
+    return saved;
   }
 
   async _getDemoZipMediaMap() {
@@ -606,75 +727,128 @@ class Database {
     if (!msg) return null;
     await this.init();
 
-    // 1. Primary lookup by mediaId
+    const rawName = (msg.mediaName || '').trim();
+    const baseName = rawName.replace(/^.*[\\/]/, '').trim();
+    const lowerTarget = baseName.toLowerCase();
+    const inferMime = this._inferMimeFromFilename(baseName, msg.mediaType);
+    const healAndReturn = async (rec) => {
+      if (!rec) return null;
+      this._hydrateMediaRecord(rec);
+      const targetId = msg.mediaId || rec.id;
+      const healed = {
+        ...rec,
+        id: targetId,
+        chatId: rec.chatId || msg.chatId || null,
+        filename: rec.filename || baseName || 'media',
+        mimeType: rec.mimeType || inferMime
+      };
+      try {
+        await this.saveMedia(healed);
+      } catch (_) {}
+      return healed;
+    };
+
+    // 1. Primary lookup by mediaId (verify blob isn't an expired File handle)
     if (msg.mediaId) {
       try {
         const direct = await this.getMedia(msg.mediaId);
-        if (direct && direct.blob) return direct;
+        if (direct && direct.blob) {
+          const readable = (direct.bytes && direct.bytes.byteLength > 0) || await this._isBlobReadable(direct.blob);
+          if (readable) {
+            // Silently upgrade legacy records missing durable bytes in background
+            if (!direct.bytes && typeof direct.blob.arrayBuffer === 'function') {
+              this.saveMedia(direct).catch(() => {});
+            }
+            return direct;
+          }
+        }
       } catch (_) {}
     }
 
-    // 2. Fallback lookup by normalized filename within the same chat (handles stale mediaIds across restores)
-    const rawName = (msg.mediaName || '').trim();
-    const baseName = rawName.replace(/^.*[\\/]/, '').trim();
-    if (baseName && msg.chatId) {
+    // 2. Cache Storage permanent mirror (survives app restarts & updates)
+    if (msg.mediaId) {
+      const fromCache = await this._readMediaFromCache(msg.mediaId, inferMime);
+      if (fromCache && fromCache.blob) {
+        return healAndReturn({
+          id: msg.mediaId,
+          chatId: msg.chatId,
+          filename: baseName || 'media',
+          type: msg.mediaType || 'document',
+          mimeType: fromCache.mimeType,
+          bytes: fromCache.bytes,
+          blob: fromCache.blob,
+          size: fromCache.size,
+          duration: msg.duration || 0,
+          timestamp: msg.timestamp || Date.now()
+        });
+      }
+    }
+
+    // 3. Fallback lookup by normalized filename within the same chat
+    if (lowerTarget && msg.chatId) {
       try {
         const chatMedia = await this.getMediaByChat(msg.chatId);
-        const lowerTarget = baseName.toLowerCase();
-        const match = chatMedia.find((m) =>
-          m && m.blob && (m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase() === lowerTarget
-        );
-        if (match) {
-          if (msg.id && match.id && match.id !== msg.mediaId) {
-            msg.mediaId = match.id;
-            this.updateMessage(msg.id, { mediaId: match.id }).catch(() => {});
+        for (const m of chatMedia) {
+          if (!m || !m.blob) continue;
+          const mBase = (m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase();
+          if (mBase !== lowerTarget) continue;
+          const readable = (m.bytes && m.bytes.byteLength > 0) || await this._isBlobReadable(m.blob);
+          if (!readable) continue;
+          if (msg.id && m.id && m.id !== msg.mediaId) {
+            msg.mediaId = m.id;
+            this.updateMessage(msg.id, { mediaId: m.id }).catch(() => {});
           }
-          return match;
+          return m;
         }
       } catch (_) {}
     }
 
-    // 3. Secondary backup recovery or built-in Demo Archive auto-heal
-    const missKey = `${msg.mediaId || ''}::${baseName.toLowerCase()}`;
+    const missKey = `${msg.mediaId || ''}::${lowerTarget}`;
     if (this._missingMediaMisses.has(missKey)) return null;
 
-    try {
-      const backupSnap = await storageBackup.readFromSecondaryIdb();
-      if (backupSnap && Array.isArray(backupSnap.media)) {
-        const match = backupSnap.media.find((m) =>
-          m && m.blob && (
-            (msg.mediaId && String(m.id) === String(msg.mediaId)) ||
-            (baseName && (m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase() === baseName.toLowerCase())
-          )
-        );
-        if (match) {
-          const healed = { ...match, id: msg.mediaId || match.id };
-          await this.saveMedia(healed);
-          return healed;
+    // 4. Cross-chat filename scan (recovers forwarded/re-imported media across all chats)
+    if (lowerTarget) {
+      try {
+        const allMedia = await this.getAllMedia();
+        for (const m of allMedia) {
+          if (!m || !m.blob) continue;
+          const mBase = (m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase();
+          if (mBase !== lowerTarget) continue;
+          const readable = (m.bytes && m.bytes.byteLength > 0) || await this._isBlobReadable(m.blob);
+          if (readable) {
+            return healAndReturn(m);
+          }
         }
+      } catch (_) {}
+    }
+
+    // 5. Secondary backup recovery (per-item WhatsAppBackupDB media_items + monolithic snapshot)
+    try {
+      const backupMatch = await storageBackup.readMediaItemBackup(msg.mediaId, baseName);
+      if (backupMatch && (backupMatch.bytes || backupMatch.blob)) {
+        return healAndReturn(backupMatch);
       }
     } catch (_) {}
 
+    // 6. Built-in Demo Archive auto-heal
     if (baseName) {
       try {
         const demoMap = await this._getDemoZipMediaMap();
-        const entry = demoMap ? demoMap.get(baseName.toLowerCase()) : null;
+        const entry = demoMap ? demoMap.get(lowerTarget) : null;
         if (entry && entry.bytes) {
-          const mimeType = this._inferMimeFromFilename(entry.filename, msg.mediaType);
-          const blob = new Blob([entry.bytes], { type: mimeType });
-          const healedRecord = {
+          const blob = new Blob([entry.bytes], { type: inferMime });
+          return healAndReturn({
             id: msg.mediaId || ('media_healed_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
             chatId: msg.chatId,
             filename: entry.filename,
             type: msg.mediaType || 'document',
-            mimeType,
+            mimeType: inferMime,
+            bytes: entry.bytes.slice ? entry.bytes.buffer.slice(0) : null,
             blob,
             size: blob.size,
             duration: msg.duration || 0,
             timestamp: msg.timestamp || Date.now()
-          };
-          await this.saveMedia(healedRecord);
-          return healedRecord;
+          });
         }
       } catch (_) {}
     }
@@ -683,25 +857,65 @@ class Database {
     return null;
   }
 
+  async migrateLegacyMediaRecords() {
+    if (this._legacyMediaMigrated) return { migrated: 0 };
+    this._legacyMediaMigrated = true;
+    await this.init();
+    let migrated = 0;
+    try {
+      const all = await this.getAllMedia();
+      for (const rec of all) {
+        if (!rec || !rec.id) continue;
+        const hasBytes = rec.bytes && rec.bytes.byteLength > 0;
+        if (!hasBytes && rec.blob && typeof rec.blob.arrayBuffer === 'function') {
+          try {
+            const readable = await this._isBlobReadable(rec.blob);
+            if (!readable) continue;
+            await this.saveMedia(rec);
+            migrated++;
+          } catch (_) {}
+        } else if (hasBytes) {
+          this._mirrorMediaToCache(rec.id, rec.bytes, rec.mimeType).catch(() => {});
+          storageBackup.saveMediaItemBackup(rec).catch(() => {});
+        }
+      }
+    } catch (_) {}
+    return { migrated };
+  }
+
   async saveMediaBatch(items) {
     await this.init();
     if (!items || items.length === 0) return true;
-    const now = Date.now();
-    return new Promise((resolve, reject) => {
+    // Materialize every item BEFORE opening IDB transaction
+    const preparedItems = [];
+    for (const item of items) {
+      if (item) {
+        preparedItems.push(await this._materializeMediaItem(item));
+      }
+    }
+    if (preparedItems.length === 0) return true;
+    const result = await new Promise((resolve, reject) => {
       const tx = this.db.transaction('media', 'readwrite');
       const store = tx.objectStore('media');
-      for (const item of items) {
-        if (item && !item.timestamp) {
-          item.timestamp = now;
-        }
+      for (const item of preparedItems) {
+        this._clearMissForItem(item);
         store.put(item);
       }
       tx.oncomplete = () => {
-        storageBackup.scheduleBackup(this);
+        storageBackup.scheduleBackup(this, 1500);
         resolve(true);
       };
       tx.onerror = () => reject(tx.error);
     });
+    for (const saved of preparedItems) {
+      if (saved && saved.id && saved.bytes) {
+        this._mirrorMediaToCache(saved.id, saved.bytes, saved.mimeType).catch(() => {});
+      }
+      if (saved && saved.id) {
+        storageBackup.saveMediaItemBackup(saved).catch(() => {});
+      }
+    }
+    return result;
   }
 
   async getMedia(id) {
@@ -709,7 +923,7 @@ class Database {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction('media', 'readonly');
       const req = tx.objectStore('media').get(id);
-      req.onsuccess = () => resolve(req.result || null);
+      req.onsuccess = () => resolve(this._hydrateMediaRecord(req.result || null));
       req.onerror = () => reject(tx.error);
     });
   }
@@ -721,7 +935,7 @@ class Database {
       const index = tx.objectStore('media').index('chatId');
       const req = index.getAll(IDBKeyRange.only(chatId));
       req.onsuccess = () => {
-        const media = req.result || [];
+        const media = (req.result || []).map((m) => this._hydrateMediaRecord(m));
         media.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         resolve(media);
       };
@@ -735,7 +949,7 @@ class Database {
       const tx = this.db.transaction('media', 'readonly');
       const req = tx.objectStore('media').getAll();
       req.onsuccess = () => {
-        const media = req.result || [];
+        const media = (req.result || []).map((m) => this._hydrateMediaRecord(m));
         media.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         resolve(media);
       };

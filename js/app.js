@@ -32,8 +32,8 @@ import { backgroundTasks } from './utils/background-tasks.js';
 import { appendFolioShowcaseToChat } from './utils/demo-generator.js';
 
 // Application Version Constant
-window.APP_VERSION = '3.0.3';
-window.APP_CACHE_NAME = 'folio-v3.0.3';
+window.APP_VERSION = '3.0.4';
+window.APP_CACHE_NAME = 'folio-v3.0.4';
 
 // Unified PWA Installation Detection & Prompt State
 window.deferredInstallPrompt = null;
@@ -229,6 +229,11 @@ class Application {
       } catch (backupErr) {
         console.warn('[AutoBackup] Error checking auto-restore:', backupErr);
       }
+
+      // Silently migrate any legacy File-backed media in older chats to durable ArrayBuffer + Cache Storage
+      setTimeout(() => {
+        db.migrateLegacyMediaRecords().catch(() => {});
+      }, 1200);
 
       // Safe beforeunload backup flush
       window.addEventListener('beforeunload', () => {

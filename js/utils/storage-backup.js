@@ -4,7 +4,7 @@
 // Tier 3: LocalStorage Emergency Snapshot (wa_emergency_backup_v1)
 
 const BACKUP_DB_NAME = 'WhatsAppBackupDB';
-const BACKUP_DB_VERSION = 1;
+const BACKUP_DB_VERSION = 2;
 const LOCALSTORAGE_BACKUP_KEY = 'wa_emergency_backup_v1';
 const LOCALSTORAGE_META_KEY = 'wa_backup_meta_v1';
 const OPFS_FILENAME = 'wa_disaster_recovery_backup.json';
@@ -118,6 +118,10 @@ class StorageBackupManager {
           if (!db.objectStoreNames.contains('snapshots')) {
             db.createObjectStore('snapshots', { keyPath: 'id' });
           }
+          if (!db.objectStoreNames.contains('media_items')) {
+            const mediaStore = db.createObjectStore('media_items', { keyPath: 'id' });
+            mediaStore.createIndex('filename', 'filename', { unique: false });
+          }
         };
 
         request.onsuccess = (event) => {
@@ -198,6 +202,114 @@ class StorageBackupManager {
     }
   }
 
+  async saveMediaItemBackup(record) {
+    if (!record || !record.id) return false;
+    try {
+      const db = await this.getBackupDatabase();
+      if (!db || !db.objectStoreNames.contains('media_items')) return false;
+      const safeRec = {
+        id: record.id,
+        chatId: record.chatId || null,
+        filename: record.filename || '',
+        type: record.type || 'document',
+        mimeType: record.mimeType || record.blob?.type || 'application/octet-stream',
+        bytes: record.bytes || null,
+        blob: record.blob || null,
+        size: record.size || (record.bytes ? record.bytes.byteLength : 0),
+        duration: record.duration || 0,
+        pageCount: record.pageCount || 0,
+        timestamp: record.timestamp || Date.now(),
+        isWhiteboard: Boolean(record.isWhiteboard),
+        whiteboardData: record.whiteboardData || null
+      };
+      return new Promise((resolve) => {
+        try {
+          const tx = db.transaction('media_items', 'readwrite');
+          tx.objectStore('media_items').put(safeRec);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        } catch (_) {
+          resolve(false);
+        }
+      });
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async readMediaItemBackup(mediaId, filename = '') {
+    const cleanBase = String(filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase();
+    try {
+      const db = await this.getBackupDatabase();
+      if (db && db.objectStoreNames.contains('media_items')) {
+        if (mediaId) {
+          const direct = await new Promise((resolve) => {
+            try {
+              const tx = db.transaction('media_items', 'readonly');
+              const req = tx.objectStore('media_items').get(mediaId);
+              req.onsuccess = () => resolve(req.result || null);
+              req.onerror = () => resolve(null);
+            } catch (_) {
+              resolve(null);
+            }
+          });
+          if (direct && (direct.bytes || direct.blob)) return direct;
+        }
+        if (cleanBase) {
+          const allItems = await new Promise((resolve) => {
+            try {
+              const tx = db.transaction('media_items', 'readonly');
+              const req = tx.objectStore('media_items').getAll();
+              req.onsuccess = () => resolve(req.result || []);
+              req.onerror = () => resolve([]);
+            } catch (_) {
+              resolve([]);
+            }
+          });
+          const byName = allItems.find((m) =>
+            m && (m.bytes || m.blob) &&
+            String(m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase() === cleanBase
+          );
+          if (byName) return byName;
+        }
+      }
+    } catch (_) {}
+
+    // Fallback to legacy monolithic snapshot array
+    try {
+      const snap = await this.readFromSecondaryIdb();
+      if (snap && Array.isArray(snap.media)) {
+        const match = snap.media.find((m) =>
+          m && (m.bytes || m.blob) && (
+            (mediaId && String(m.id) === String(mediaId)) ||
+            (cleanBase && String(m.filename || '').replace(/^.*[\\/]/, '').trim().toLowerCase() === cleanBase)
+          )
+        );
+        if (match) return match;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  async readAllMediaItemBackups() {
+    try {
+      const db = await this.getBackupDatabase();
+      if (!db || !db.objectStoreNames.contains('media_items')) return [];
+      return await new Promise((resolve) => {
+        try {
+          const tx = db.transaction('media_items', 'readonly');
+          const req = tx.objectStore('media_items').getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => resolve([]);
+        } catch (_) {
+          resolve([]);
+        }
+      });
+    } catch (_) {
+      return [];
+    }
+  }
+
   // ── 3. Origin Private File System (OPFS) Layer ─────────────────────────────
   async saveToOpfs(snapshotJsonString) {
     if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.getDirectory !== 'function') {
@@ -263,7 +375,7 @@ class StorageBackupManager {
       });
 
       const payload = {
-        version: snapshot.version || '3.0.3',
+        version: snapshot.version || '3.0.4',
         timestamp: snapshot.timestamp || Date.now(),
         chats: snapshot.chats || [],
         messages: compactMessages,
@@ -289,7 +401,7 @@ class StorageBackupManager {
         // Fallback: save at least chats, settings, calls, filters and recent messages
         const recentMessages = (snapshot.messages || []).slice(-300);
         const minimalPayload = {
-          version: snapshot.version || '3.0.3',
+          version: snapshot.version || '3.0.4',
           timestamp: snapshot.timestamp || Date.now(),
           chats: snapshot.chats || [],
           messages: recentMessages,
@@ -386,7 +498,7 @@ class StorageBackupManager {
       });
 
       const snapshot = {
-        version: '3.0.3',
+        version: '3.0.4',
         timestamp: Date.now(),
         chatCount: chats.length,
         messageCount: messages.length,
@@ -540,7 +652,14 @@ class StorageBackupManager {
 
     try {
       await dbInstance.init();
-      const hasMedia = Array.isArray(snapshot.media) && snapshot.media.length > 0 && dbInstance.db.objectStoreNames.contains('media');
+      let mediaList = Array.isArray(snapshot.media) ? snapshot.media : [];
+      if (mediaList.length === 0) {
+        const extraMedia = await this.readAllMediaItemBackups();
+        if (Array.isArray(extraMedia) && extraMedia.length > 0) {
+          mediaList = extraMedia;
+        }
+      }
+      const hasMedia = mediaList.length > 0 && dbInstance.db.objectStoreNames.contains('media');
       const stores = ['chats', 'messages', 'calls', 'filters', 'settings'];
       if (hasMedia) stores.push('media');
       const tx = dbInstance.db.transaction(stores, 'readwrite');
@@ -571,7 +690,7 @@ class StorageBackupManager {
       // Populate media blobs if present in secondary IDB backup
       if (hasMedia) {
         const mediaStore = tx.objectStore('media');
-        for (const med of snapshot.media) {
+        for (const med of mediaList) {
           if (med && med.id) mediaStore.put(med);
         }
       }

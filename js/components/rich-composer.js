@@ -542,24 +542,24 @@ export class RichComposer {
       }
 
       const isVisual = kind === 'image' || kind === 'whiteboard';
-      div.innerHTML = `
-        <div class="rc-embed-stage">${stageHtml}</div>
-        <div class="rc-embed-toolbar">
-          <span class="rc-embed-drag-grip" title="Hold & drag to move">☰</span>
-          <button type="button" class="rc-embed-layout-btn ${layout === 'full' ? 'active' : ''}" data-layout="full" title="Full width">Full</button>
-          <button type="button" class="rc-embed-layout-btn ${layout === 'left' ? 'active' : ''}" data-layout="left" title="Wrap Left">L</button>
-          <button type="button" class="rc-embed-layout-btn ${layout === 'right' ? 'active' : ''}" data-layout="right" title="Wrap Right">R</button>
-          ${isVisual ? `<button type="button" class="rc-embed-fit-btn" title="${fit === 'contain' ? 'Fit (contain) — click for Fill' : 'Fill (cover) — click for Fit'}">${fit === 'contain' ? 'Fit' : 'Fill'}</button>` : ''}
-          ${kind === 'whiteboard' ? `<button type="button" class="rc-embed-edit-btn" title="Edit Whiteboard">✎</button>` : ''}
-          <button type="button" class="rc-embed-remove-btn" title="Remove">×</button>
-        </div>
-        <div class="rc-embed-size-badge" aria-hidden="true"></div>
-        <div class="rc-embed-resize-handle handle-s" data-resize="s" title="Drag to resize height"></div>
-        <div class="rc-embed-resize-handle handle-e" data-resize="e" title="Drag to resize width"></div>
-        <div class="rc-embed-resize-handle handle-w" data-resize="w" title="Drag to resize width"></div>
-        <div class="rc-embed-resize-handle handle-se" data-resize="se" title="Drag to resize"></div>
-        <div class="rc-embed-resize-handle handle-sw" data-resize="sw" title="Drag to resize"></div>
-      `;
+      // Compact single-line HTML (zero inter-tag newlines so inherited white-space:pre-wrap can NEVER create empty gaps)
+      div.innerHTML =
+        `<div class="rc-embed-stage">${stageHtml}</div>` +
+        `<div class="rc-embed-toolbar">` +
+          `<span class="rc-embed-drag-grip" title="Hold & drag to move">☰</span>` +
+          `<button type="button" class="rc-embed-layout-btn ${layout === 'full' ? 'active' : ''}" data-layout="full" title="Full width">Full</button>` +
+          `<button type="button" class="rc-embed-layout-btn ${layout === 'left' ? 'active' : ''}" data-layout="left" title="Wrap Left">L</button>` +
+          `<button type="button" class="rc-embed-layout-btn ${layout === 'right' ? 'active' : ''}" data-layout="right" title="Wrap Right">R</button>` +
+          (isVisual ? `<button type="button" class="rc-embed-fit-btn" title="${fit === 'contain' ? 'Fit (contain) — click for Fill' : 'Fill (cover) — click for Fit'}">${fit === 'contain' ? 'Fit' : 'Fill'}</button>` : '') +
+          (kind === 'whiteboard' ? `<button type="button" class="rc-embed-edit-btn" title="Edit Whiteboard">✎</button>` : '') +
+          `<button type="button" class="rc-embed-remove-btn" title="Remove">×</button>` +
+        `</div>` +
+        `<div class="rc-embed-size-badge" aria-hidden="true"></div>` +
+        `<div class="rc-embed-resize-handle handle-s" data-resize="s" title="Drag to resize height"></div>` +
+        `<div class="rc-embed-resize-handle handle-e" data-resize="e" title="Drag to resize width"></div>` +
+        `<div class="rc-embed-resize-handle handle-w" data-resize="w" title="Drag to resize width"></div>` +
+        `<div class="rc-embed-resize-handle handle-se" data-resize="se" title="Drag to resize"></div>` +
+        `<div class="rc-embed-resize-handle handle-sw" data-resize="sw" title="Drag to resize"></div>`;
 
       const audioTag = div.querySelector('audio');
       if (audioTag) {

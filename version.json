@@ -1,5 +1,5 @@
 {
-  "version": "3.0.3",
-  "cacheName": "folio-v3.0.3",
-  "notes": "Folio v3.0.3: Exclude inline embeds from external edit-banner media chips, full 100% embed box height fill & smooth pointer-captured vertical resizing with auto Fit-to-Fill, and choreographed Selection Mode header cascade with slim vertical icon rail & classic 3-dots toggle."
+  "version": "3.0.4",
+  "cacheName": "folio-v3.0.4",
+  "notes": "Folio v3.0.4: Eliminate blank pre-wrap gaps in inline embeds, Selection Mode left-arrow flip with in-place classic toggle & wider centered overflow labels, durable ArrayBuffer + Cache Storage + per-item WhatsAppBackupDB media persistence, silent legacy migration, and one-tap Restore / Re-link for missing legacy media."
 }

@@ -1313,14 +1313,14 @@ export class VirtualMessageScroller {
       return { width: msg.mediaWidth, height: msg.mediaHeight };
     }
     let mediaUrl = null;
-    if (msg.mediaId) {
-      if (this.mediaCache.has(msg.mediaId)) {
+    if (msg.mediaId || msg.mediaName) {
+      if (msg.mediaId && this.mediaCache.has(msg.mediaId)) {
         mediaUrl = this.mediaCache.get(msg.mediaId);
       } else {
-        const item = await db.getMedia(msg.mediaId);
+        const item = await db.resolveMediaForMessage(msg);
         if (item && item.blob) {
           mediaUrl = URL.createObjectURL(item.blob);
-          this.mediaCache.set(msg.mediaId, mediaUrl);
+          this.mediaCache.set(item.id || msg.mediaId, mediaUrl);
         }
       }
     }
@@ -1853,7 +1853,12 @@ export class VirtualMessageScroller {
       if (!mediaUrl) {
         let mediaItem = null;
         try {
-          mediaItem = await db.getMedia(replyTo.mediaId);
+          mediaItem = await db.resolveMediaForMessage({
+            chatId: this.chatId,
+            mediaId: replyTo.mediaId,
+            mediaName: replyTo.mediaName || '',
+            mediaType: replyTo.mediaType
+          });
         } catch (_) {}
 
         if (mediaItem && mediaItem.blob) {
@@ -2158,6 +2163,26 @@ export class VirtualMessageScroller {
     }
   }
 
+  _createRelinkButton(msg, mediaId, mediaName, mediaType, isInlineEmbed = false, compact = false) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `wa-media-relink-btn${compact ? ' is-compact' : ''}`;
+    if (msg?.id) btn.dataset.relinkMsgId = String(msg.id);
+    if (mediaId) btn.dataset.relinkMediaId = String(mediaId);
+    if (mediaName) btn.dataset.relinkMediaName = String(mediaName);
+    if (mediaType) btn.dataset.relinkMediaType = String(mediaType);
+    btn.textContent = 'Restore / Re-link';
+    btn.title = 'Restore missing media from file or WhatsApp .zip';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(new CustomEvent('wa:relink-media', {
+        detail: { msg, mediaId: mediaId || msg?.mediaId || null, mediaName: mediaName || msg?.mediaName || '', mediaType: mediaType || msg?.mediaType || 'document', isInlineEmbed }
+      }));
+    });
+    return btn;
+  }
+
   async _hydrateInlineEmbeds(bodyEl, msg) {
     if (!bodyEl) return;
     const embeds = Array.from(bodyEl.querySelectorAll('.wa-inline-embed[data-embed-media-id]'));
@@ -2180,8 +2205,16 @@ export class VirtualMessageScroller {
         });
       } catch (_) {}
 
+      const renderUnavailableEmbed = () => {
+        el.innerHTML = `<div class="wa-embed-file-card"><span>📎</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(label || 'Attachment unavailable')}</span></div>`;
+        const card = el.querySelector('.wa-embed-file-card');
+        if (card) {
+          card.appendChild(this._createRelinkButton(msg, mediaId, label, kind === 'whiteboard' ? 'image' : kind, true, true));
+        }
+      };
+
       if (!mediaItem || !mediaItem.blob) {
-        el.innerHTML = `<div class="wa-embed-file-card"><span>📎</span><span>${this.escapeHtml(label || 'Attachment unavailable')}</span></div>`;
+        renderUnavailableEmbed();
         continue;
       }
 
@@ -2202,6 +2235,31 @@ export class VirtualMessageScroller {
         const imgEl = el.querySelector('.wa-embed-img');
         if (imgEl) {
           imgEl.addEventListener('load', () => this.scheduleTreeConnectorRedraw());
+          imgEl.addEventListener('error', async () => {
+            if (imgEl.dataset.recoveryTried) {
+              renderUnavailableEmbed();
+              this.scheduleTreeConnectorRedraw();
+              return;
+            }
+            imgEl.dataset.recoveryTried = '1';
+            try { URL.revokeObjectURL(url); } catch (_) {}
+            this.mediaCache.delete(mediaId);
+            const recovered = await db.resolveMediaForMessage({
+              chatId: msg.chatId,
+              mediaId,
+              mediaName: label,
+              mediaType: 'image',
+              timestamp: msg.timestamp
+            });
+            if (recovered && recovered.blob) {
+              const nextUrl = URL.createObjectURL(recovered.blob);
+              this.mediaCache.set(mediaId, nextUrl);
+              imgEl.src = nextUrl;
+            } else {
+              renderUnavailableEmbed();
+              this.scheduleTreeConnectorRedraw();
+            }
+          });
           imgEl.addEventListener('click', (e) => {
             if (this.selectionMode || this.pickReplyMode || this.pickNestParentMode) return;
             e.stopPropagation();
@@ -2301,6 +2359,45 @@ export class VirtualMessageScroller {
           }
           this.scheduleTreeConnectorRedraw();
         });
+        img.addEventListener('error', async () => {
+          if (img.dataset.recoveryTried) {
+            wrap.className = 'media-image-wrap wa-media-loading-container';
+            wrap.dataset.pendingMediaId = String(msg.mediaId || '');
+            wrap.dataset.msgId = String(msg.id);
+            wrap.innerHTML = `
+              <div class="wa-media-loading-badge" title="Media unavailable">
+                ${Icons.gallery('', 24)}
+              </div>
+              <div class="wa-media-loading-label">${this.escapeHtml(msg.mediaName || (type === 'sticker' ? 'Sticker' : 'Photo'))} (Unavailable)</div>
+            `;
+            wrap.appendChild(this._createRelinkButton(msg, msg.mediaId, msg.mediaName, type, false));
+            this.scheduleTreeConnectorRedraw();
+            return;
+          }
+          img.dataset.recoveryTried = '1';
+          if (msg.mediaId) {
+            try { URL.revokeObjectURL(mediaUrl); } catch (_) {}
+            this.mediaCache.delete(msg.mediaId);
+          }
+          const recovered = await db.resolveMediaForMessage(msg);
+          if (recovered && recovered.blob) {
+            const nextUrl = URL.createObjectURL(recovered.blob);
+            this.mediaCache.set(recovered.id || msg.mediaId, nextUrl);
+            img.src = nextUrl;
+          } else {
+            wrap.className = 'media-image-wrap wa-media-loading-container';
+            wrap.dataset.pendingMediaId = String(msg.mediaId || '');
+            wrap.dataset.msgId = String(msg.id);
+            wrap.innerHTML = `
+              <div class="wa-media-loading-badge" title="Media unavailable">
+                ${Icons.gallery('', 24)}
+              </div>
+              <div class="wa-media-loading-label">${this.escapeHtml(msg.mediaName || (type === 'sticker' ? 'Sticker' : 'Photo'))} (Unavailable)</div>
+            `;
+            wrap.appendChild(this._createRelinkButton(msg, msg.mediaId, msg.mediaName, type, false));
+            this.scheduleTreeConnectorRedraw();
+          }
+        });
         if (type !== 'sticker') {
           img.addEventListener('click', () => this.onMediaClick(mediaItem, msg));
         }
@@ -2328,6 +2425,9 @@ export class VirtualMessageScroller {
           </div>
           <div class="wa-media-loading-label">${this.escapeHtml(msg.mediaName || (type === 'sticker' ? 'Sticker' : 'Photo'))}${isPending ? '' : ' (Unavailable)'}</div>
         `;
+        if (!isPending) {
+          wrap.appendChild(this._createRelinkButton(msg, msg.mediaId, msg.mediaName, type, false));
+        }
       }
       return wrap;
     }
@@ -2372,6 +2472,9 @@ export class VirtualMessageScroller {
           </div>
           <div class="wa-media-loading-label">${this.escapeHtml(msg.mediaName || 'Video')}${isPending ? '' : ' (Unavailable)'}</div>
         `;
+        if (!isPending) {
+          wrap.appendChild(this._createRelinkButton(msg, msg.mediaId, msg.mediaName, 'video', false));
+        }
       }
       return wrap;
     }
@@ -2392,16 +2495,19 @@ export class VirtualMessageScroller {
         audioHolder.className = 'media-placeholder wa-audio-loading-holder';
         audioHolder.dataset.pendingMediaId = String(msg.mediaId || '');
         audioHolder.dataset.msgId = String(msg.id);
-        audioHolder.style.cssText = 'display:flex; align-items:center; padding:10px 14px; gap:12px; border-radius:8px; background:rgba(0,0,0,0.18); min-width:180px;';
+        audioHolder.style.cssText = 'display:flex; align-items:center; flex-wrap:wrap; padding:10px 14px; gap:10px 12px; border-radius:8px; background:rgba(0,0,0,0.18); min-width:180px;';
         audioHolder.innerHTML = `
           <div class="wa-media-loading-badge" style="width: 38px; height: 38px; min-width: 38px;" title="${isPending ? 'Processing voice note...' : 'Audio unavailable'}">
             ${isPending ? Icons.spinner('media-spinner', 20) : Icons.mic('', 20)}
           </div>
-          <div style="display:flex; flex-direction:column; overflow:hidden;">
+          <div style="display:flex; flex-direction:column; overflow:hidden; flex:1; min-width:0;">
             <span style="font-size:13px; font-weight:500;">Voice note</span>
             <span style="font-size:11px; opacity:0.75;">${msg.duration ? Math.round(msg.duration) + 's • ' : ''}${isPending ? 'Loading audio...' : 'Audio unavailable'}</span>
           </div>
         `;
+        if (!isPending) {
+          audioHolder.appendChild(this._createRelinkButton(msg, msg.mediaId, msg.mediaName, 'audio', false, true));
+        }
         return audioHolder;
       }
     }
@@ -2426,6 +2532,9 @@ export class VirtualMessageScroller {
             ${isPending ? Icons.spinner('media-spinner', 20) : Icons.pdfIcon('', 26)}
           </div>
         `;
+        if (!isPending) {
+          thumbBox.appendChild(this._createRelinkButton(msg, msg.mediaId, msg.mediaName, 'pdf', false, true));
+        }
       }
       card.appendChild(thumbBox);
 
@@ -2488,6 +2597,11 @@ export class VirtualMessageScroller {
     } else {
       docCard.dataset.pendingMediaId = String(msg.mediaId || '');
       docCard.dataset.msgId = String(msg.id);
+      if (!isPending) {
+        docCard.querySelector('.doc-download-btn')?.replaceWith(
+          this._createRelinkButton(msg, msg.mediaId, msg.mediaName, 'document', false, true)
+        );
+      }
     }
 
     return docCard;
@@ -2566,7 +2680,8 @@ export class VirtualMessageScroller {
 
       if (!hasCached) {
         try {
-          const rec = await db.getMedia(mediaId);
+          const msgObj = this.allMessages.find((m) => String(m.mediaId) === String(mediaId) || String(m.replyTo?.mediaId) === String(mediaId));
+          const rec = await db.resolveMediaForMessage(msgObj || { chatId: this.chatId, mediaId });
           if (!rec || !rec.blob) continue;
           const url = URL.createObjectURL(rec.blob);
           this.mediaCache.set(mediaId, url);

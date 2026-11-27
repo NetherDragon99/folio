@@ -1,6 +1,7 @@
-// Folio Service Worker v3.0.3
-const APP_VERSION = '3.0.3';
-const CACHE_NAME = 'folio-v3.0.3';
+// Folio Service Worker v3.0.4
+const APP_VERSION = '3.0.4';
+const CACHE_NAME = 'folio-v3.0.4';
+const USER_MEDIA_CACHE_NAME = 'folio-user-media-v1';
 
 const APP_SHELL_FILES = [
   './',
@@ -126,7 +127,7 @@ async function purgeOutdatedCaches() {
   const deleted = [];
   await Promise.all(
     cacheNames.map(async (name) => {
-      if (name !== CACHE_NAME) {
+      if (name !== CACHE_NAME && name !== USER_MEDIA_CACHE_NAME) {
         console.log('[SW] Purging outdated cache:', name);
         const ok = await caches.delete(name);
         if (ok) deleted.push(name);

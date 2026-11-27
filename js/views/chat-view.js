@@ -60,6 +60,7 @@ export class ChatView {
     this.isSelectionMode = false;
     this._selectionMenuExpanded = false;
     this._selectionCascadePending = false;
+    this._selectionKeepClassicOpen = false;
     this.replyingTo = null;
     this.editingMessage = null;
     this.linkingReplyForMsg = null;
@@ -698,6 +699,13 @@ export class ChatView {
     }
     this._onEditWhiteboardBound = (e) => this._handleEditWhiteboardEvent(e.detail);
     window.addEventListener('wa:edit-whiteboard', this._onEditWhiteboardBound);
+
+    // One-Tap Media Restore / Re-link event (single file or WhatsApp .zip batch restore)
+    if (this._onRelinkMedia) {
+      window.removeEventListener('wa:relink-media', this._onRelinkMedia);
+    }
+    this._onRelinkMedia = (e) => this._handleRelinkMediaEvent(e.detail);
+    window.addEventListener('wa:relink-media', this._onRelinkMedia);
 
     // 3-Dot Dropdown Menu Listeners (@refrance14)
     const moreMenuBtn = this.container.querySelector('#btn-chat-menu-more');
@@ -1621,7 +1629,7 @@ export class ChatView {
       resolveEmbedMedia: async (mediaId) => {
         if (!mediaId) return null;
         try {
-          const mediaItem = await db.getMedia(mediaId);
+          const mediaItem = await db.resolveMediaForMessage({ chatId: this.chatId, mediaId });
           if (!mediaItem) return null;
           const previewUrl = mediaItem.blob ? URL.createObjectURL(mediaItem.blob) : '';
           const sizeText = mediaItem.size ? db.formatBytes(mediaItem.size) : '';
@@ -4271,7 +4279,7 @@ export class ChatView {
         modeToggle.className = `selection-overflow-item selection-overflow-mode-toggle${shouldCascade && isRailMode ? ' is-rail-item-drop' : ''}`;
         modeToggle.style.setProperty('--item-idx', String(overflowTools.length));
         const toggleLabel = isRailMode ? 'Classic 3-dots menu' : 'Quick icon rail';
-        const toggleIcon = isRailMode ? Icons.moreVert('', 18) : Icons.chevronRight('', 18);
+        const toggleIcon = isRailMode ? Icons.moreVert('', 18) : Icons.chevronLeft('', 18);
         modeToggle.title = isRailMode ? 'Switch to classic 3-dots menu' : 'Switch to quick icon rail';
         modeToggle.setAttribute('aria-label', modeToggle.title);
         modeToggle.innerHTML = `
@@ -4284,6 +4292,7 @@ export class ChatView {
           this._setSelectionRailMode(nextRail);
           this._selectionMenuExpanded = false;
           this._selectionCascadePending = nextRail;
+          this._selectionKeepClassicOpen = !nextRail;
           this.updateMessageSelectionBar();
           Toast.show(nextRail ? 'Quick icon rail enabled' : 'Classic 3-dots menu enabled');
         });
@@ -4292,7 +4301,7 @@ export class ChatView {
 
       if (overflowBtn) {
         if (isRailMode) {
-          overflowBtn.innerHTML = Icons.chevronRight('', 20);
+          overflowBtn.innerHTML = Icons.chevronLeft('', 20);
           overflowBtn.classList.add('is-rail-arrow');
           overflowBtn.classList.toggle('is-morph-in', shouldCascade);
           overflowBtn.classList.toggle('is-expanded', this._selectionMenuExpanded);
@@ -4304,20 +4313,24 @@ export class ChatView {
           overflowBtn.classList.remove('is-rail-arrow', 'is-morph-in', 'is-expanded');
           overflowBtn.title = 'More options';
           overflowBtn.setAttribute('aria-label', 'More options');
-          overflowBtn.setAttribute('aria-expanded', 'false');
+          overflowBtn.setAttribute('aria-expanded', this._selectionKeepClassicOpen ? 'true' : 'false');
         }
       }
 
       if (overflowMenu) {
         if (isRailMode) {
+          this._selectionKeepClassicOpen = false;
           overflowMenu.classList.remove('is-classic-open');
           overflowMenu.classList.add('is-rail-mode', 'is-rail-open');
           overflowMenu.classList.toggle('is-rail-expanded', this._selectionMenuExpanded);
           overflowMenu.classList.toggle('is-rail-cascading', shouldCascade);
           overflowMenu.style.display = 'flex';
         } else {
-          overflowMenu.classList.remove('is-rail-mode', 'is-rail-open', 'is-rail-expanded', 'is-rail-cascading', 'is-classic-open');
-          overflowMenu.style.display = 'none';
+          const keepOpen = Boolean(this._selectionKeepClassicOpen);
+          this._selectionKeepClassicOpen = false;
+          overflowMenu.classList.remove('is-rail-mode', 'is-rail-open', 'is-rail-expanded', 'is-rail-cascading');
+          overflowMenu.classList.toggle('is-classic-open', keepOpen);
+          overflowMenu.style.display = keepOpen ? 'block' : 'none';
         }
       }
 
@@ -4329,6 +4342,7 @@ export class ChatView {
     this.isSelectionMode = false;
     this._selectionMenuExpanded = false;
     this._selectionCascadePending = false;
+    this._selectionKeepClassicOpen = false;
     if (this.scroller) this.scroller.selectionMode = false;
     this.selectedMessageIds.clear();
     this.reactionBar?.hide();
@@ -5254,11 +5268,160 @@ export class ChatView {
     window.addEventListener('touchcancel', onCancel);
   }
 
+  async _handleRelinkMediaEvent(detail = {}) {
+    if (!this.chatId || !this.scroller) return;
+    const targetMsg = detail?.msg || null;
+    const targetMediaId = detail?.mediaId || targetMsg?.mediaId || db.generateUUID();
+    const targetMediaName = detail?.mediaName || targetMsg?.mediaName || '';
+    const targetMediaType = detail?.mediaType || targetMsg?.mediaType || 'document';
+
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = '.zip,image/*,video/*,audio/*,.pdf,*/*';
+    picker.style.display = 'none';
+    document.body.appendChild(picker);
+
+    const cleanupPicker = () => {
+      try { picker.remove(); } catch (_) {}
+    };
+
+    picker.addEventListener('cancel', cleanupPicker);
+    picker.addEventListener('change', async (ev) => {
+      const file = ev.target?.files?.[0];
+      cleanupPicker();
+      if (!file) return;
+
+      const isZip = /\.zip$/i.test(file.name || '') || file.type === 'application/zip';
+      if (isZip) {
+        if (typeof window === 'undefined' || !window.fflate) {
+          Toast.show('ZIP extractor unavailable');
+          return;
+        }
+        try {
+          Toast.show('Scanning ZIP for missing media...');
+          const buf = await file.arrayBuffer();
+          const unzipped = await new Promise((resolve, reject) => {
+            window.fflate.unzip(new Uint8Array(buf), (err, res) => (err ? reject(err) : resolve(res)));
+          });
+          const zipMap = new Map();
+          for (const [rawPath, bytes] of Object.entries(unzipped || {})) {
+            if (!rawPath || rawPath.endsWith('/') || rawPath.toLowerCase().endsWith('.txt')) continue;
+            const base = rawPath.replace(/^.*[\\/]/, '').trim();
+            if (base && bytes && bytes.byteLength > 0) {
+              zipMap.set(base.toLowerCase(), { filename: base, bytes });
+            }
+          }
+
+          let restoredCount = 0;
+          const handledIds = new Set();
+          const saveCandidate = async (mId, mName, mType, ts, msgObj = null) => {
+            const base = String(mName || '').replace(/^.*[\\/]/, '').trim().toLowerCase();
+            if (!base) return;
+            const entry = zipMap.get(base);
+            if (!entry) return;
+            const resolvedId = mId || db.generateUUID();
+            if (handledIds.has(resolvedId)) return;
+            handledIds.add(resolvedId);
+
+            const mimeType = db._inferMimeFromFilename(entry.filename, mType);
+            const rawBuf = entry.bytes.buffer.slice(entry.bytes.byteOffset, entry.bytes.byteOffset + entry.bytes.byteLength);
+            const blob = new Blob([rawBuf], { type: mimeType });
+            await db.saveMedia({
+              id: resolvedId,
+              chatId: this.chatId,
+              filename: entry.filename,
+              type: mType || 'document',
+              mimeType,
+              bytes: rawBuf,
+              blob,
+              size: rawBuf.byteLength,
+              duration: msgObj?.duration || 0,
+              timestamp: ts || Date.now()
+            });
+            if (msgObj && msgObj.id && !msgObj.mediaId) {
+              msgObj.mediaId = resolvedId;
+              await db.updateMessage(msgObj.id, { mediaId: resolvedId });
+            }
+            if (this.scroller.mediaCache?.has(resolvedId)) {
+              try { URL.revokeObjectURL(this.scroller.mediaCache.get(resolvedId)); } catch (_) {}
+              this.scroller.mediaCache.delete(resolvedId);
+            }
+            restoredCount++;
+          };
+
+          const embedRe = /\[embed:(image|audio|file|whiteboard):([^:\]\s]+):[^|\]]*\|?([^\]]*)\]/g;
+          for (const m of (this.scroller.allMessages || [])) {
+            if (m.mediaName || m.mediaId) {
+              await saveCandidate(m.mediaId, m.mediaName, m.mediaType, m.timestamp, m);
+            }
+            if (m.text && m.text.includes('[embed:')) {
+              embedRe.lastIndex = 0;
+              let em;
+              while ((em = embedRe.exec(m.text)) !== null) {
+                await saveCandidate(em[2], em[3] || '', em[1] === 'whiteboard' ? 'image' : em[1], m.timestamp, null);
+              }
+            }
+          }
+
+          if (restoredCount > 0) {
+            await this.scroller.reloadPreservingScroll();
+            Toast.show(`Restored ${restoredCount} media file(s)`);
+          } else {
+            Toast.show('No matching media files found in ZIP');
+          }
+        } catch (err) {
+          console.warn('[ChatView] ZIP relink failed:', err);
+          Toast.show('Failed to read ZIP archive');
+        }
+        return;
+      }
+
+      // Single-file re-link
+      try {
+        const mimeType = file.type || db._inferMimeFromFilename(file.name || targetMediaName, targetMediaType);
+        const saved = await db.saveMedia({
+          id: targetMediaId,
+          chatId: this.chatId,
+          filename: file.name || targetMediaName || 'restored_media',
+          type: targetMediaType || 'document',
+          mimeType,
+          blob: file,
+          size: file.size || 0,
+          duration: targetMsg?.duration || 0,
+          timestamp: targetMsg?.timestamp || Date.now()
+        });
+        if (targetMsg && targetMsg.id && !targetMsg.mediaId) {
+          targetMsg.mediaId = saved.id;
+          await db.updateMessage(targetMsg.id, { mediaId: saved.id });
+        }
+        if (this.scroller.mediaCache?.has(targetMediaId)) {
+          try { URL.revokeObjectURL(this.scroller.mediaCache.get(targetMediaId)); } catch (_) {}
+          this.scroller.mediaCache.delete(targetMediaId);
+        }
+        if (targetMsg && targetMsg.id) {
+          await this.scroller.updateMessageInPlace(targetMsg);
+        } else {
+          await this.scroller.reloadPreservingScroll();
+        }
+        Toast.show('Media restored');
+      } catch (err) {
+        console.warn('[ChatView] Single file relink failed:', err);
+        Toast.show('Failed to restore media file');
+      }
+    });
+
+    picker.click();
+  }
+
   cleanup() {
     clearTimeout(this._floatingDateTimer);
     if (this._onEditWhiteboardBound) {
       window.removeEventListener('wa:edit-whiteboard', this._onEditWhiteboardBound);
       this._onEditWhiteboardBound = null;
+    }
+    if (this._onRelinkMedia) {
+      window.removeEventListener('wa:relink-media', this._onRelinkMedia);
+      this._onRelinkMedia = null;
     }
     this._closeAttachDrawer?.(true);
     clearTimeout(this._linkPreviewDebounce);
