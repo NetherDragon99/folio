@@ -24,6 +24,8 @@ export class ImportModal {
     this.isAutoCreatingDemo = false;
     this.rawParseResult = null;
     this.extractedMediaFiles = new Map();
+    this.unzippedFiles = null;
+    this.folioChatMeta = null;
     this.existingChatId = null;
   }
 
@@ -425,6 +427,8 @@ export class ImportModal {
 
     let chatText = '';
     const mediaFiles = new Map(); // cleanBasename -> { filename, uint8Array, size }
+    this.unzippedFiles = null;
+    this.folioChatMeta = null;
 
     try {
       if (file.name.toLowerCase().endsWith('.zip')) {
@@ -443,11 +447,27 @@ export class ImportModal {
           });
         });
 
+        this.unzippedFiles = unzipped;
         this.updateProgress(45, 'Scanning chat log and media...');
+
+        const allKeys = Object.keys(unzipped);
+        const fullBackupKey = allKeys.find((k) => k === 'backup.json' || k.endsWith('/backup.json'));
+        const folioMetaKey = allKeys.find((k) => k === 'folio_chat_meta.json' || k.endsWith('/folio_chat_meta.json'));
+
+        if (folioMetaKey) {
+          try {
+            const parsedMeta = JSON.parse(new TextDecoder('utf-8').decode(unzipped[folioMetaKey]));
+            if (parsedMeta && parsedMeta.format === 'folio-chat-v1' && Array.isArray(parsedMeta.messages)) {
+              this.folioChatMeta = parsedMeta;
+            }
+          } catch (metaErr) {
+            console.warn('[ImportModal] Failed parsing folio_chat_meta.json:', metaErr);
+          }
+        }
 
         // Find the chat text file
         let chatFileKey = null;
-        for (const filename of Object.keys(unzipped)) {
+        for (const filename of allKeys) {
           const lower = filename.toLowerCase();
           if (lower.endsWith('.txt')) {
             if (lower.includes('_chat') || lower.includes('chat') || lower.includes('دردشة') || !chatFileKey) {
@@ -456,17 +476,27 @@ export class ImportModal {
           }
         }
 
-        if (!chatFileKey) {
+        if (!this.folioChatMeta && fullBackupKey && !chatFileKey) {
+          throw new Error('This is a Full Folio Backup (.folio.zip). Please restore it from Settings -> Restore Backup File.');
+        }
+
+        if (!chatFileKey && !this.folioChatMeta) {
           throw new Error('No .txt chat export found inside this zip archive.');
         }
 
-        // Decode chat text
-        const decoder = new TextDecoder('utf-8');
-        chatText = decoder.decode(unzipped[chatFileKey]);
+        if (chatFileKey) {
+          const decoder = new TextDecoder('utf-8');
+          chatText = decoder.decode(unzipped[chatFileKey]);
+        }
 
         // Map media files by normalized base filename
         for (const [filename, fileData] of Object.entries(unzipped)) {
-          if (filename === chatFileKey || filename.endsWith('/')) continue;
+          if (
+            filename === chatFileKey ||
+            filename === folioMetaKey ||
+            filename === fullBackupKey ||
+            filename.endsWith('/')
+          ) continue;
           const cleanName = this.parser.normalizeFilename(filename);
           mediaFiles.set(cleanName, {
             originalName: filename,
@@ -481,35 +511,55 @@ export class ImportModal {
       }
 
       this.updateProgress(65, 'Parsing messages & contacts...');
-      const parseResult = this.parser.parseChatLog(chatText);
+      let parseResult = null;
+      if (this.folioChatMeta) {
+        const metaChat = this.folioChatMeta.chat || {};
+        const derivedParticipants = Array.isArray(metaChat.participantNames) && metaChat.participantNames.length > 0
+          ? [...metaChat.participantNames]
+          : Array.from(new Set(this.folioChatMeta.messages.map((m) => m.sender).filter(Boolean)));
+        parseResult = {
+          participants: derivedParticipants.length > 0 ? derivedParticipants : ['Contact', 'You'],
+          messages: this.folioChatMeta.messages,
+          calls: Array.isArray(this.folioChatMeta.calls) ? this.folioChatMeta.calls : [],
+          isFolioChatMeta: true
+        };
+      } else {
+        parseResult = this.parser.parseChatLog(chatText);
+      }
 
       if (parseResult.messages.length === 0) {
         throw new Error('No valid WhatsApp messages found in the selected file.');
       }
 
-      // Auto-detect avatar/profile picture from archive media files
-      let detectedAvatar = null;
-      for (const [cleanName, fileItem] of mediaFiles.entries()) {
-        const lower = cleanName.toLowerCase();
-        if (/\.(jpg|jpeg|png|webp)$/i.test(lower)) {
-          if (lower.includes('profile') || lower.includes('avatar') || lower.includes('contact') || lower.includes('user')) {
-            detectedAvatar = fileItem;
-            break;
+      // Auto-detect avatar/profile picture from folio_chat_meta or archive media files
+      let detectedAvatarBlob = null;
+      const metaAvPath = this.folioChatMeta?.chat?.avatarArchivePath;
+      if (metaAvPath && this.unzippedFiles && this.unzippedFiles[metaAvPath]) {
+        const avU8 = this.unzippedFiles[metaAvPath];
+        detectedAvatarBlob = new Blob([avU8], { type: this.folioChatMeta.chat.avatarMime || 'image/jpeg' });
+      } else {
+        let detectedAvatar = null;
+        for (const [cleanName, fileItem] of mediaFiles.entries()) {
+          const lower = cleanName.toLowerCase();
+          if (/\.(jpg|jpeg|png|webp)$/i.test(lower)) {
+            if (lower.includes('profile') || lower.includes('avatar') || lower.includes('contact') || lower.includes('user')) {
+              detectedAvatar = fileItem;
+              break;
+            }
+            if (!detectedAvatar && (lower === 'photo.jpg' || lower === 'photo.png' || lower === 'photo.webp')) {
+              detectedAvatar = fileItem;
+            }
           }
-          if (!detectedAvatar && (lower === 'photo.jpg' || lower === 'photo.png' || lower === 'photo.webp')) {
-            detectedAvatar = fileItem;
-          }
+        }
+        if (detectedAvatar) {
+          let mime = 'image/jpeg';
+          if (detectedAvatar.cleanName.endsWith('.png')) mime = 'image/png';
+          if (detectedAvatar.cleanName.endsWith('.webp')) mime = 'image/webp';
+          detectedAvatarBlob = new Blob([detectedAvatar.data], { type: mime });
         }
       }
 
-      if (detectedAvatar) {
-        let mime = 'image/jpeg';
-        if (detectedAvatar.cleanName.endsWith('.png')) mime = 'image/png';
-        if (detectedAvatar.cleanName.endsWith('.webp')) mime = 'image/webp';
-        this.chatAvatarBlob = new Blob([detectedAvatar.data], { type: mime });
-      } else {
-        this.chatAvatarBlob = null;
-      }
+      this.chatAvatarBlob = detectedAvatarBlob;
 
       this.rawParseResult = parseResult;
       this.extractedMediaFiles = mediaFiles;
@@ -554,12 +604,21 @@ export class ImportModal {
     const groupChatToggle = this.overlay.querySelector('#toggle-group-chat');
     const finishBtn = this.overlay.querySelector('#btn-finish-import');
 
-    selfChatToggle.checked = participants.length === 1;
-    groupChatToggle.checked = participants.length >= 3;
+    const metaChat = this.folioChatMeta?.chat || null;
+    if (metaChat) {
+      selfChatToggle.checked = Boolean(metaChat.isSelfChat);
+      groupChatToggle.checked = Boolean(metaChat.isGroup);
+    } else {
+      selfChatToggle.checked = participants.length === 1;
+      groupChatToggle.checked = participants.length >= 3;
+    }
 
     // Detect synchronous default "Me" index first (before any async DB calls!)
     let defaultMeIndex = 0;
-    if (participants.length === 2) {
+    if (metaChat && metaChat.meParticipant) {
+      const idx = participants.findIndex((p) => (p || '').trim() === metaChat.meParticipant.trim());
+      if (idx !== -1) defaultMeIndex = idx;
+    } else if (participants.length === 2) {
       const meIdx = participants.findIndex((p) => {
         const lower = (p || '').trim().toLowerCase();
         return lower === 'me' || lower === 'you' || lower === 'أنا' || lower === 'انا';
@@ -581,7 +640,7 @@ export class ImportModal {
       }
     };
 
-    nameInput.value = getChatNameForMeIndex(defaultMeIndex);
+    nameInput.value = (metaChat && metaChat.name) ? metaChat.name : getChatNameForMeIndex(defaultMeIndex);
 
     // Render participant radio buttons synchronously using safe DOM nodes
     participants.forEach((name, idx) => {
@@ -754,6 +813,173 @@ export class ImportModal {
 
       const chatId = (overlapChoice === 'merge' && this.existingChatId) ? this.existingChatId : 'chat_' + Date.now();
       const mediaIdMap = new Map(); // cleanName -> mediaId
+
+      if (this.folioChatMeta && this.rawParseResult.isFolioChatMeta) {
+        const meta = this.folioChatMeta;
+        const oldChatId = meta.chat?.id || '';
+        const mediaIdRemap = new Map();
+        const mediaItemsToSave = [];
+        const baseRand = Math.random().toString(36).slice(2, 6);
+        const baseTs = Date.now();
+
+        let medIdx = 0;
+        for (const [oldMedId, mMeta] of Object.entries(meta.mediaIndex || {})) {
+          const newMedId = `media_${baseTs}_${medIdx++}_${baseRand}`;
+          mediaIdRemap.set(oldMedId, newMedId);
+
+          let rawBytes = null;
+          if (mMeta.archivePath && this.unzippedFiles && this.unzippedFiles[mMeta.archivePath]) {
+            rawBytes = this.unzippedFiles[mMeta.archivePath];
+          } else if (mMeta.filename && this.extractedMediaFiles) {
+            const norm = this.parser.normalizeFilename(mMeta.filename);
+            const fallbackEntry = this.extractedMediaFiles.get(norm);
+            if (fallbackEntry) rawBytes = fallbackEntry.data;
+          }
+
+          if (rawBytes && rawBytes.byteLength > 0) {
+            const copied = rawBytes.slice();
+            const mimeType = mMeta.mimeType || 'application/octet-stream';
+            let thumbnailBlob = null;
+            if (mMeta.thumbArchivePath && this.unzippedFiles && this.unzippedFiles[mMeta.thumbArchivePath]) {
+              const tU8 = this.unzippedFiles[mMeta.thumbArchivePath].slice();
+              if (tU8.byteLength > 0) {
+                thumbnailBlob = new Blob([tU8], { type: mMeta.thumbMimeType || 'image/jpeg' });
+              }
+            }
+            mediaItemsToSave.push({
+              id: newMedId,
+              chatId,
+              filename: mMeta.filename || 'media',
+              mimeType,
+              type: mMeta.type || 'document',
+              bytes: copied.buffer,
+              blob: new Blob([copied], { type: mimeType }),
+              size: copied.byteLength,
+              timestamp: mMeta.timestamp || baseTs,
+              duration: mMeta.duration || 0,
+              width: mMeta.width,
+              height: mMeta.height,
+              thumbnailBlob
+            });
+          }
+        }
+
+        const msgIdRemap = new Map();
+        meta.messages.forEach((m, idx) => {
+          if (m && m.id) {
+            msgIdRemap.set(m.id, `msg_${baseTs}_${String(idx).padStart(6, '0')}_${baseRand}`);
+          }
+        });
+
+        const remappedMessages = meta.messages.map((m, idx) => {
+          const newId = (m.id && msgIdRemap.get(m.id)) || `msg_${baseTs}_${String(idx).padStart(6, '0')}_${baseRand}`;
+          const copy = { ...m, id: newId, chatId };
+          if (copy.mediaId && mediaIdRemap.has(copy.mediaId)) {
+            copy.mediaId = mediaIdRemap.get(copy.mediaId);
+          }
+          if (copy.replyTo && copy.replyTo.id && msgIdRemap.has(copy.replyTo.id)) {
+            copy.replyTo = { ...copy.replyTo, id: msgIdRemap.get(copy.replyTo.id) };
+          }
+          if (copy.nestedParent && msgIdRemap.has(copy.nestedParent)) {
+            copy.nestedParent = msgIdRemap.get(copy.nestedParent);
+          }
+          if (copy.parentMessageId && msgIdRemap.has(copy.parentMessageId)) {
+            copy.parentMessageId = msgIdRemap.get(copy.parentMessageId);
+          }
+          if (typeof copy.text === 'string' && copy.text.includes('[embed:')) {
+            copy.text = copy.text.replace(
+              /\[embed:(image|audio|file|whiteboard):([^:\]\n]+?)((?::[^|\]\n]*)?(?:\|[^\]\n]*)?)\]/g,
+              (full, kind, oldId, suffix) => {
+                const trimmed = (oldId || '').trim();
+                const mappedId = mediaIdRemap.get(trimmed);
+                return mappedId ? `[embed:${kind}:${mappedId}${suffix || ''}]` : full;
+              }
+            );
+          }
+          if (isSelfChat) {
+            copy.isOutgoing = true;
+          } else if (meName && meta.chat?.meParticipant && meName !== meta.chat.meParticipant && copy.sender) {
+            copy.isOutgoing = copy.sender === meName;
+          }
+          return copy;
+        });
+
+        this.updateProgress(88, 'Restoring media & formatting...');
+        if (mediaItemsToSave.length > 0 && typeof db.saveMediaBatch === 'function') {
+          await db.saveMediaBatch(mediaItemsToSave);
+        }
+
+        await db.saveMessages(remappedMessages);
+
+        const calls = (meta.calls || []).map((c) => ({
+          ...c,
+          id: `call_${baseTs}_${Math.random().toString(36).slice(2, 7)}`,
+          chatId,
+          contactName: chatName
+        }));
+        if (calls.length > 0 && typeof db.saveCallsBatch === 'function') {
+          await db.saveCallsBatch(calls);
+        }
+
+        if (Array.isArray(meta.pins) && meta.pins.length > 0 && typeof db.savePinsForChat === 'function') {
+          const remappedPins = meta.pins.map((p) => {
+            if (typeof p === 'string') return msgIdRemap.get(p) || p;
+            if (p && typeof p === 'object') {
+              return { ...p, messageId: (p.messageId && msgIdRemap.get(p.messageId)) || p.messageId };
+            }
+            return p;
+          });
+          await db.savePinsForChat(chatId, remappedPins);
+        }
+
+        if (Array.isArray(meta.chatSettings) && meta.chatSettings.length > 0 && typeof db.saveSetting === 'function') {
+          for (const cs of meta.chatSettings) {
+            if (!cs || !cs.key || String(cs.key).startsWith('pinnedMessages_')) continue;
+            const targetKey = oldChatId ? String(cs.key).split(oldChatId).join(chatId) : cs.key;
+            if (cs._archiveBlobFile && this.unzippedFiles && this.unzippedFiles[cs._archiveBlobFile]) {
+              const sU8 = this.unzippedFiles[cs._archiveBlobFile].slice();
+              await db.saveSetting(targetKey, new Blob([sU8], { type: cs._archiveBlobMime || 'application/octet-stream' }));
+            } else {
+              await db.saveSetting(targetKey, cs.value);
+            }
+          }
+        }
+
+        db._callsBackfillChecked = false;
+        const lastMsg = remappedMessages[remappedMessages.length - 1] || null;
+        const finalAvatar = this.pendingOverrideAvatar || this.chatAvatarBlob || null;
+        const {
+          avatarArchivePath: _unusedAvPath,
+          avatarMime: _unusedAvMime,
+          ...inheritedChatProps
+        } = (meta.chat || {});
+
+        const chatRecord = {
+          ...inheritedChatProps,
+          id: chatId,
+          name: chatName,
+          avatarBlob: finalAvatar,
+          participantNames: this.rawParseResult.participants,
+          meParticipant: meName,
+          isGroup,
+          isSelfChat,
+          unreadCount: 0,
+          lastMessage: lastMsg ? {
+            text: lastMsg.text,
+            timestamp: lastMsg.timestamp,
+            isOutgoing: lastMsg.isOutgoing,
+            mediaType: lastMsg.mediaType
+          } : null,
+          updatedAt: Date.now()
+        };
+
+        await db.saveChat(chatRecord);
+        this.updateProgress(100, 'Chat ready!');
+        Toast.show(`Chat opened: ${chatName}`);
+        this.close();
+        if (this.onComplete) this.onComplete(chatId);
+        return;
+      }
 
       // Index message timestamps by normalized mediaName for authentic media dating
       const msgTimestampByMediaName = new Map();

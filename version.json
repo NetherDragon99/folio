@@ -1,5 +1,5 @@
 {
-  "version": "3.0.5",
-  "cacheName": "folio-v3.0.5",
-  "notes": "Folio v3.0.5: True Word-style wrapping of text, bullets, numbers, and checklists around & underneath floated media + razor-tight 2px vertical & 8px horizontal inline embed margins with zero blank-line gaps."
+  "version": "3.0.6",
+  "cacheName": "folio-v3.0.6",
+  "notes": "Folio v3.0.6: Full lossless .folio.zip backup & restore (all formatting, inline embeds, reactions, binary media, avatars, wallpapers, preferences), lossless single-chat export/import (folio-chat-v1) with inline embeds, and complete auto-backup snapshot fidelity."
 }

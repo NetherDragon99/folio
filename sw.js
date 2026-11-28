@@ -1,6 +1,6 @@
-// Folio Service Worker v3.0.5
-const APP_VERSION = '3.0.5';
-const CACHE_NAME = 'folio-v3.0.5';
+// Folio Service Worker v3.0.6
+const APP_VERSION = '3.0.6';
+const CACHE_NAME = 'folio-v3.0.6';
 const USER_MEDIA_CACHE_NAME = 'folio-user-media-v1';
 
 const APP_SHELL_FILES = [
@@ -21,6 +21,7 @@ const APP_SHELL_FILES = [
   './js/ui-motion.js',
   './js/virtual-scroller.js',
   './js/utils/background-tasks.js',
+  './js/utils/backup-archive.js',
   './js/utils/chat-reorder-dnd.js',
   './js/utils/date-jump.js',
   './js/utils/demo-generator.js',

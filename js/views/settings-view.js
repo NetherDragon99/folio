@@ -5,6 +5,9 @@ import { PinDialog } from '../components/pin-dialog.js';
 import { Toast } from '../components/toast.js';
 import { openImageCropper } from '../components/image-cropper.js';
 import { showConfirm, showAlert, showPrompt } from '../components/custom-dialog.js';
+import { applyAppAccent, applyOutgoingBubbleColor } from '../config/palette.js';
+import { applyAppIcon } from '../config/app-icons.js';
+import { exportFullBackupArchive, parseFullBackupFile, applyRestoredBackup } from '../utils/backup-archive.js';
 
 export class SettingsView {
   constructor(router) {
@@ -25,7 +28,7 @@ export class SettingsView {
       let enterToSend = localStorage.getItem('wa_enter_to_send') !== 'false';
       let persistenceInfo = { isPersisted: false };
       let backupStatus = { hasBackup: false, lastStats: null };
-      const appVersion = window.APP_VERSION || '3.0.5';
+      const appVersion = window.APP_VERSION || '3.0.6';
       const cacheStatus = window.__waCacheStatus || null;
       const updateState = (window.app && typeof window.app.getUpdateState === 'function')
         ? window.app.getUpdateState()
@@ -250,18 +253,18 @@ export class SettingsView {
             <div class="settings-option-row clickable" id="row-export-backup">
               <span class="settings-icon">${Icons.archive('', 20)}</span>
               <div class="settings-texts">
-                <div class="setting-title">Export Full Backup (.json)</div>
-                <div class="setting-sub">Save all chats and media as a standalone backup file</div>
+                <div class="setting-title">Export Full Backup (.folio.zip)</div>
+                <div class="setting-sub">Save all chats, media, embeds, reactions & preferences</div>
               </div>
             </div>
 
             <div class="settings-option-row clickable" id="row-restore-backup">
               <span class="settings-icon">${Icons.forward('', 20)}</span>
               <div class="settings-texts">
-                <div class="setting-title">Restore Backup File (.json)</div>
-                <div class="setting-sub">Import previously exported database archive</div>
+                <div class="setting-title">Restore Backup File (.folio.zip / .json)</div>
+                <div class="setting-sub">Import previously exported Folio or JSON backup archive</div>
               </div>
-              <input type="file" id="backup-restore-input" accept=".zip,.json" style="display:none;" />
+              <input type="file" id="backup-restore-input" accept=".zip,.folio.zip,.json" style="display:none;" />
             </div>
 
             <div class="settings-option-row clickable danger-row" id="row-reset-database">
@@ -544,16 +547,16 @@ export class SettingsView {
 
     // Export Full Backup
     this.container.querySelector('#row-export-backup').addEventListener('click', async () => {
-      Toast.show('Packaging backup archive...');
+      Toast.show('Packaging full .folio.zip archive...');
       try {
-        const data = await db.exportFullBackup();
-        const jsonStr = JSON.stringify(data);
-        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const result = await exportFullBackupArchive(db, window.fflate);
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `folio_backup_${Date.now()}.json`;
+        const objUrl = URL.createObjectURL(result.blob);
+        a.href = objUrl;
+        a.download = result.filename;
         a.click();
-        Toast.show('Backup exported successfully');
+        setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+        Toast.show(`Backup exported (${result.stats.chatCount} chats, ${result.stats.mediaCount} media files)`);
       } catch (err) {
         await showAlert({ title: 'Export Failed', message: err.message || 'Could not export backup.' });
       }
@@ -569,27 +572,41 @@ export class SettingsView {
       if (e.target.files && e.target.files[0]) {
         const file = e.target.files[0];
         try {
-          const text = await file.text();
-          const json = JSON.parse(text);
+          Toast.show('Reading backup archive...');
+          const parsed = await parseFullBackupFile(file, window.fflate);
+          const mediaCount = Array.isArray(parsed.media) ? parsed.media.length : 0;
+          const msgCount = Array.isArray(parsed.messages) ? parsed.messages.length : 0;
+          const chatCount = Array.isArray(parsed.chats) ? parsed.chats.length : 0;
           const confirmed = await showConfirm({
             title: 'Restore Backup',
-            message: 'Restore this backup? This will replace current chats.',
+            message: `Restore ${chatCount} chats, ${msgCount} messages, and ${mediaCount} media files? This will replace current chats.`,
             confirmText: 'Restore',
             cancelText: 'Cancel'
           });
           if (confirmed) {
-            await db.restoreFullBackup(json);
+            Toast.show('Restoring workspace & media...');
+            await applyRestoredBackup(parsed, db);
+            try {
+              const restoredTheme = localStorage.getItem('wa_theme_mode') || 'light';
+              document.documentElement.setAttribute('data-theme', restoredTheme);
+              applyAppAccent(localStorage.getItem('wa_app_accent'));
+              applyOutgoingBubbleColor(localStorage.getItem('wa_outgoing_bubble_color'));
+              const iconId = localStorage.getItem('wa_app_icon_id');
+              if (iconId) applyAppIcon(iconId);
+            } catch (_) {}
             Toast.show('Backup restored successfully!');
             setTimeout(() => this.router.navigate('#/chats'), 500);
           }
         } catch (err) {
           await showAlert({ title: 'Invalid Backup', message: err.message || 'Failed to read backup file.' });
+        } finally {
+          restoreInput.value = '';
         }
       }
     });
 
     // Check for Updates, Background Download Progress & Restart to Update
-    const appVersion = window.APP_VERSION || '3.0.5';
+    const appVersion = window.APP_VERSION || '3.0.6';
     const updateRow = this.container.querySelector('#row-check-updates');
     const updateSubEl = this.container.querySelector('#settings-update-status-sub');
     const updateReadyCard = this.container.querySelector('#settings-update-ready-card');

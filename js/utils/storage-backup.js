@@ -346,42 +346,62 @@ class StorageBackupManager {
   }
 
   // ── 4. LocalStorage Emergency Snapshot Layer ──────────────────────────────
+  _isValidBlobLike(val) {
+    if (!val || typeof val !== 'object') return false;
+    if (typeof Blob !== 'undefined' && val instanceof Blob) return val.size > 0;
+    if (typeof val.arrayBuffer === 'function') return typeof val.size === 'number' ? val.size > 0 : true;
+    return false;
+  }
+
+  _sanitizeSnapshotForJson(snapshot) {
+    const safeChats = (snapshot.chats || []).map((c) => {
+      if (!c || typeof c !== 'object') return c;
+      const { avatarBlob, ...rest } = c;
+      return { ...rest, avatarBlob: null };
+    });
+
+    const safeSettings = (snapshot.settings || []).filter((s) => {
+      if (!s || !s.key) return false;
+      const v = s.value;
+      if (this._isValidBlobLike(v) || v instanceof ArrayBuffer || ArrayBuffer.isView(v)) {
+        return false;
+      }
+      if (
+        (s.key === 'userAvatarBlob' || s.key === 'customWallpaperBlob') &&
+        v &&
+        typeof v === 'object' &&
+        !this._isValidBlobLike(v) &&
+        Object.keys(v).length === 0
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    return {
+      ...snapshot,
+      chats: safeChats,
+      settings: safeSettings
+    };
+  }
+
   saveToLocalStorage(snapshot) {
     if (typeof localStorage === 'undefined') return false;
 
     try {
-      // LocalStorage has a ~5MB quota. Prepare a compact representation.
-      const compactMessages = (snapshot.messages || []).map((m) => {
-        const item = {
-          id: m.id,
-          chatId: m.chatId,
-          sender: m.sender,
-          text: m.text,
-          timestamp: m.timestamp,
-          isOutgoing: m.isOutgoing,
-          isSystem: m.isSystem
-        };
-        if (m.replyTo) item.replyTo = m.replyTo;
-        if (m.isStarred) item.isStarred = true;
-        if (m.seq !== undefined) item.seq = m.seq;
-        if (m.mediaType) item.mediaType = m.mediaType;
-        if (m.mediaName) item.mediaName = m.mediaName;
-        if (m.mediaId) item.mediaId = m.mediaId;
-        if (m.parentMessageId) item.parentMessageId = m.parentMessageId;
-        if (m.nestedListStyle) item.nestedListStyle = m.nestedListStyle;
-        if (m.nestedListNumber) item.nestedListNumber = m.nestedListNumber;
-        if (m.callInfo) item.callInfo = m.callInfo;
-        return item;
-      });
+      const jsonSafeSnapshot = this._sanitizeSnapshotForJson(snapshot);
+
+      // LocalStorage has a ~5MB quota. Preserve all Folio message fields & metadata cleanly.
+      const compactMessages = (jsonSafeSnapshot.messages || []).map((m) => ({ ...m }));
 
       const payload = {
-        version: snapshot.version || '3.0.5',
-        timestamp: snapshot.timestamp || Date.now(),
-        chats: snapshot.chats || [],
+        version: jsonSafeSnapshot.version || '3.0.6',
+        timestamp: jsonSafeSnapshot.timestamp || Date.now(),
+        chats: jsonSafeSnapshot.chats || [],
         messages: compactMessages,
-        calls: snapshot.calls || [],
-        filters: snapshot.filters || [],
-        settings: snapshot.settings || []
+        calls: jsonSafeSnapshot.calls || [],
+        filters: jsonSafeSnapshot.filters || [],
+        settings: jsonSafeSnapshot.settings || []
       };
 
       const jsonStr = JSON.stringify(payload);
@@ -398,16 +418,17 @@ class StorageBackupManager {
     } catch (err) {
       console.warn('[StorageBackup] LocalStorage emergency save warning (likely quota):', err);
       try {
+        const jsonSafeSnapshot = this._sanitizeSnapshotForJson(snapshot);
         // Fallback: save at least chats, settings, calls, filters and recent messages
-        const recentMessages = (snapshot.messages || []).slice(-300);
+        const recentMessages = (jsonSafeSnapshot.messages || []).slice(-300).map((m) => ({ ...m }));
         const minimalPayload = {
-          version: snapshot.version || '3.0.5',
-          timestamp: snapshot.timestamp || Date.now(),
-          chats: snapshot.chats || [],
+          version: jsonSafeSnapshot.version || '3.0.6',
+          timestamp: jsonSafeSnapshot.timestamp || Date.now(),
+          chats: jsonSafeSnapshot.chats || [],
           messages: recentMessages,
-          calls: snapshot.calls || [],
-          filters: snapshot.filters || [],
-          settings: snapshot.settings || []
+          calls: jsonSafeSnapshot.calls || [],
+          filters: jsonSafeSnapshot.filters || [],
+          settings: jsonSafeSnapshot.settings || []
         };
         localStorage.setItem(LOCALSTORAGE_BACKUP_KEY, JSON.stringify(minimalPayload));
         const meta = {
@@ -498,7 +519,7 @@ class StorageBackupManager {
       });
 
       const snapshot = {
-        version: '3.0.5',
+        version: '3.0.6',
         timestamp: Date.now(),
         chatCount: chats.length,
         messageCount: messages.length,
@@ -510,12 +531,13 @@ class StorageBackupManager {
         settings
       };
 
-      // 1. Save to Secondary IndexedDB (includes media blobs)
+      // 1. Save to Secondary IndexedDB (includes full media & avatar Blobs)
       await this.saveToSecondaryIdb({ ...snapshot, media });
 
-      // 2. Save to OPFS
+      // 2. Save sanitized JSON snapshot to OPFS (strip Blob handles so `{}` never corrupts avatars/settings)
       try {
-        const jsonStr = JSON.stringify(snapshot);
+        const jsonSafe = this._sanitizeSnapshotForJson(snapshot);
+        const jsonStr = JSON.stringify(jsonSafe);
         await this.saveToOpfs(jsonStr);
       } catch (opfsErr) {
         // Ignore OPFS errors
@@ -677,9 +699,14 @@ class StorageBackupManager {
       filterStore.clear();
       setStore.clear();
 
-      // Populate chats
+      // Populate chats (sanitize dead `{}` avatarBlob objects)
       for (const c of snapshot.chats || []) {
-        chatStore.put(c);
+        if (!c || typeof c !== 'object') continue;
+        const copy = { ...c };
+        if (copy.avatarBlob && !this._isValidBlobLike(copy.avatarBlob)) {
+          copy.avatarBlob = null;
+        }
+        chatStore.put(copy);
       }
 
       // Populate messages
@@ -705,8 +732,20 @@ class StorageBackupManager {
         filterStore.put(f);
       }
 
-      // Populate settings
+      // Populate settings (skip corrupted `{}` Blob placeholders)
       for (const s of snapshot.settings || []) {
+        if (!s || !s.key) continue;
+        if (
+          (s.key === 'userAvatarBlob' || s.key === 'customWallpaperBlob') &&
+          s.value &&
+          typeof s.value === 'object' &&
+          !this._isValidBlobLike(s.value) &&
+          !(s.value instanceof ArrayBuffer) &&
+          !ArrayBuffer.isView(s.value) &&
+          Object.keys(s.value).length === 0
+        ) {
+          continue;
+        }
         setStore.put(s);
       }
 
@@ -715,6 +754,7 @@ class StorageBackupManager {
         tx.onerror = () => reject(tx.error);
       });
 
+      if (dbInstance._missingMediaMisses) dbInstance._missingMediaMisses.clear();
       console.log('[StorageBackup] Database auto-restore completed successfully!');
       return true;
     } finally {

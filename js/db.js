@@ -1476,7 +1476,7 @@ class Database {
     });
 
     return {
-      version: '2.3.1',
+      version: '3.0.6',
       exportedAt: Date.now(),
       chats,
       messages,
@@ -1489,9 +1489,50 @@ class Database {
 
   async restoreFullBackup(data) {
     await this.init();
-    if (!data || !data.chats || !data.messages) {
+    if (!data || !Array.isArray(data.chats) || !Array.isArray(data.messages)) {
       throw new Error('Invalid backup file structure.');
     }
+
+    // Materialize all media BEFORE opening the IDB transaction (never await inside IDB tx)
+    const preparedMedia = [];
+    if (Array.isArray(data.media)) {
+      for (const rawMed of data.media) {
+        if (!rawMed || !rawMed.id) continue;
+        const hasBytes = rawMed.bytes && (rawMed.bytes instanceof ArrayBuffer || ArrayBuffer.isView(rawMed.bytes)) && rawMed.bytes.byteLength > 0;
+        const hasValidBlob = rawMed.blob && typeof rawMed.blob.arrayBuffer === 'function' && (typeof rawMed.blob.size !== 'number' || rawMed.blob.size > 0);
+        if (!hasBytes && !hasValidBlob) continue;
+        const materialized = await this._materializeMediaItem(rawMed);
+        if (materialized) preparedMedia.push(materialized);
+      }
+    }
+
+    // Sanitize chats (strip dead `{}` avatarBlob from legacy JSON exports)
+    const preparedChats = data.chats.map((c) => {
+      if (!c || typeof c !== 'object') return c;
+      const copy = { ...c };
+      if (copy.avatarBlob) {
+        const validAvatar = typeof copy.avatarBlob.arrayBuffer === 'function' && (typeof copy.avatarBlob.size !== 'number' || copy.avatarBlob.size > 0);
+        if (!validAvatar) copy.avatarBlob = null;
+      }
+      return copy;
+    });
+
+    // Strip dead `{}` objects from Blob setting keys
+    const preparedSettings = (data.settings || []).filter((s) => {
+      if (!s || !s.key) return false;
+      if (
+        (s.key === 'userAvatarBlob' || s.key === 'customWallpaperBlob') &&
+        s.value &&
+        typeof s.value === 'object' &&
+        typeof s.value.arrayBuffer !== 'function' &&
+        !(s.value instanceof ArrayBuffer) &&
+        !ArrayBuffer.isView(s.value) &&
+        Object.keys(s.value).length === 0
+      ) {
+        return false;
+      }
+      return true;
+    });
 
     const tx = this.db.transaction(['chats', 'messages', 'media', 'calls', 'filters', 'settings'], 'readwrite');
 
@@ -1505,38 +1546,50 @@ class Database {
 
     // Populate
     const chatStore = tx.objectStore('chats');
-    for (const c of data.chats) chatStore.put(c);
+    for (const c of preparedChats) chatStore.put(c);
 
     const msgStore = tx.objectStore('messages');
     for (const m of data.messages) msgStore.put(m);
 
-    if (data.media) {
-      const mediaStore = tx.objectStore('media');
-      for (const med of data.media) mediaStore.put(med);
+    const mediaStore = tx.objectStore('media');
+    for (const med of preparedMedia) {
+      this._clearMissForItem(med);
+      mediaStore.put(med);
     }
 
-    if (data.calls) {
+    if (Array.isArray(data.calls)) {
       const callStore = tx.objectStore('calls');
       for (const call of data.calls) callStore.put(call);
     }
 
-    if (data.filters) {
+    if (Array.isArray(data.filters)) {
       const filterStore = tx.objectStore('filters');
       for (const f of data.filters) filterStore.put(f);
     }
 
-    if (data.settings) {
-      const setStore = tx.objectStore('settings');
-      for (const s of data.settings) setStore.put(s);
-    }
+    const setStore = tx.objectStore('settings');
+    for (const s of preparedSettings) setStore.put(s);
 
-    return new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
       tx.oncomplete = () => {
+        if (this._missingMediaMisses) this._missingMediaMisses.clear();
         storageBackup.scheduleBackup(this);
         resolve(true);
       };
       tx.onerror = () => reject(tx.error);
     });
+
+    // Mirror restored media to Cache Storage & Secondary IDB after commit
+    for (const med of preparedMedia) {
+      if (med && med.id && med.bytes) {
+        this._mirrorMediaToCache(med.id, med.bytes, med.mimeType).catch(() => {});
+      }
+      if (med && med.id) {
+        storageBackup.saveMediaItemBackup(med).catch(() => {});
+      }
+    }
+
+    return true;
   }
 
   async clearAllData() {
